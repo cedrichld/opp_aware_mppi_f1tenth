@@ -13,6 +13,7 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Point
 from std_msgs.msg import Float32MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
+from raceline_msgs.srv import UpdateRaceline
 
 try:
     from ament_index_python.packages import get_package_share_directory
@@ -102,6 +103,48 @@ class MPPI_Node(Node):
         self.opt_traj_marker_pub = self.create_publisher(MarkerArray, "/mppi/optimal_trajectory", qos)
         self.sampled_traj_marker_pub = self.create_publisher(MarkerArray, "/mppi/sampled_trajectories", qos)
         self.speed_debug_pub = self.create_publisher(Float32MultiArray, "/mppi/speed_debug", qos)
+
+        self.update_raceline_srv = self.create_service(
+            UpdateRaceline, '/mppi/update_raceline', self.update_raceline_callback
+        )
+        self.get_logger().info('Raceline update service ready at /mppi/update_raceline')
+
+    def update_raceline_callback(self, request, response):
+        try:
+            if request.format != 'mppi':
+                response.success = False
+                response.message = f"expected format='mppi', got '{request.format}'"
+                return response
+            if request.cols != 9:
+                response.success = False
+                response.message = f"expected cols=9, got {request.cols}"
+                return response
+            expected_rows = int(self.infer_env.waypoints.shape[0])
+            if int(request.rows) != expected_rows:
+                response.success = False
+                response.message = (
+                    f"row count mismatch: got {request.rows}, expected {expected_rows} "
+                    f"(changing N would trigger JAX re-JIT; restart the node to change size)"
+                )
+                return response
+            data = np.asarray(request.data, dtype=np.float64)
+            if data.size != request.rows * request.cols:
+                response.success = False
+                response.message = (
+                    f"data length {data.size} != rows*cols {request.rows * request.cols}"
+                )
+                return response
+            waypoints = data.reshape(int(request.rows), int(request.cols))
+            self.infer_env.update_waypoints(waypoints)
+            response.success = True
+            response.message = f"hot-swapped {waypoints.shape[0]} waypoints"
+            self.get_logger().info(response.message)
+            return response
+        except Exception as exc:
+            response.success = False
+            response.message = f"update failed: {exc}"
+            self.get_logger().error(response.message)
+            return response
 
     def default_config_path(self):
         if get_package_share_directory is not None:
