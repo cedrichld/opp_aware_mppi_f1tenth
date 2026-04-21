@@ -371,6 +371,9 @@ class InferEnv():
                 'reward_xy_sum': 0.0,
                 'reward_velocity_sum': 0.0,
                 'reward_yaw_sum': 0.0,
+                'cost_total_sum': 0.0,
+                'cost_total_mean': 0.0,
+                'cost_invalid_sum': 0.0,
                 'cost_wall_sum': 0.0,
                 'cost_slip_sum': 0.0,
                 'cost_latacc_sum': 0.0,
@@ -438,6 +441,7 @@ class InferEnv():
             - weighted_latacc
             - weighted_steer
         )
+        total_cost = invalid_penalty + weighted_wall + weighted_slip + weighted_latacc + weighted_steer
 
         return {
             'reward_total_sum': float(np.sum(total)),
@@ -445,6 +449,9 @@ class InferEnv():
             'reward_xy_sum': float(np.sum(weighted_xy)),
             'reward_velocity_sum': float(np.sum(weighted_vel)),
             'reward_yaw_sum': float(np.sum(weighted_yaw)),
+            'cost_total_sum': float(np.sum(total_cost)),
+            'cost_total_mean': float(np.mean(total_cost)),
+            'cost_invalid_sum': float(np.sum(invalid_penalty)),
             'cost_wall_sum': float(np.sum(weighted_wall)),
             'cost_slip_sum': float(np.sum(weighted_slip)),
             'cost_latacc_sum': float(np.sum(weighted_latacc)),
