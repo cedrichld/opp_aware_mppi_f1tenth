@@ -5,11 +5,19 @@ from setuptools import find_packages, setup
 
 package_name = 'mppi_example'
 
-# Older setuptools builds on the Jetson can choke on the legacy editable flag
-# that colcon passes for --symlink-install. Strip it so develop/install still
-# work across both environments.
-while '--editable' in sys.argv:
-    sys.argv.remove('--editable')
+def _strip_arg(argv, flag, takes_value=False):
+    while flag in argv:
+        idx = argv.index(flag)
+        del argv[idx]
+        if takes_value and idx < len(argv):
+            del argv[idx]
+
+
+# Older setuptools builds on the Jetson can choke on the legacy colcon develop
+# flags used for --symlink-install. Strip only the compatibility flags that are
+# safe to ignore so the package still builds across both environments.
+_strip_arg(sys.argv, '--editable')
+_strip_arg(sys.argv, '--build-directory', takes_value=True)
 
 data_files = [
     ('share/ament_index/resource_index/packages',
