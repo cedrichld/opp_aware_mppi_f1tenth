@@ -38,7 +38,7 @@ lmppi_node:
     speed_profile_drive_blend: 1.0           # 0 = pure MPPI accel command; 1 = pure raceline/profile speed command.
     speed_profile_drive_lookahead_steps: 3   # Command brake lookahead: which future ref speed drives /drive.speed.
     speed_profile_drive_use_min_lookahead: true # true: use min speed through lookahead to avoid early exit accel.
-    speed_profile_drive_max_accel: 3.5       # Max commanded speed increase in m/s^2, using real callback dt.
+    speed_profile_drive_max_accel: 2.5       # Max commanded speed increase in m/s^2, using real callback dt.
     speed_profile_drive_max_decel: 8.0       # Max commanded speed decrease in m/s^2; usually higher than accel.
 
     # MPPI control exploration.
@@ -58,7 +58,7 @@ lmppi_node:
     velocity_reward_weight: 0.5        # Penalizes mismatch to reference speed, not raw speed by itself.
     yaw_reward_weight: 0.1             # Penalizes heading mismatch; helps avoid sideways path matches.
 
-    wall_cost_enabled: true
+    wall_cost_enabled: false
     wall_cost_weight: 4.0
     wall_cost_margin: 0.35
     wall_cost_power: 2.0
