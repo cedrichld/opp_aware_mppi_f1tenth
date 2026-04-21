@@ -11,7 +11,7 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Point
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32, Float32MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
 from raceline_msgs.srv import UpdateRaceline
 
@@ -44,6 +44,23 @@ jax.config.update("jax_compilation_cache_dir",
 ## Zirui Zang 2025/04/07
 
 class MPPI_Node(Node):
+    DEBUG_SCALAR_TOPICS = {
+        'reward_total_sum': '/mppi/debug/reward_total_sum',
+        'reward_total_mean': '/mppi/debug/reward_total_mean',
+        'reward_xy_sum': '/mppi/debug/reward_xy_sum',
+        'reward_velocity_sum': '/mppi/debug/reward_velocity_sum',
+        'reward_yaw_sum': '/mppi/debug/reward_yaw_sum',
+        'cost_wall_sum': '/mppi/debug/cost_wall_sum',
+        'cost_slip_sum': '/mppi/debug/cost_slip_sum',
+        'cost_latacc_sum': '/mppi/debug/cost_latacc_sum',
+        'cost_steer_sat_sum': '/mppi/debug/cost_steer_sat_sum',
+        'min_wall_dist': '/mppi/debug/min_wall_dist',
+        'max_beta': '/mppi/debug/max_beta',
+        'max_latacc': '/mppi/debug/max_latacc',
+        'max_abs_steer': '/mppi/debug/max_abs_steer',
+        'invalid_steps': '/mppi/debug/invalid_steps',
+    }
+
     def __init__(self):
         super().__init__('mppi_node')
         self.config = utils.ConfigYAML()
@@ -104,6 +121,10 @@ class MPPI_Node(Node):
         self.opt_traj_marker_pub = self.create_publisher(MarkerArray, "/mppi/optimal_trajectory", qos)
         self.sampled_traj_marker_pub = self.create_publisher(MarkerArray, "/mppi/sampled_trajectories", qos)
         self.speed_debug_pub = self.create_publisher(Float32MultiArray, "/mppi/speed_debug", qos)
+        self.reward_debug_pubs = {
+            key: self.create_publisher(Float32, topic, qos)
+            for key, topic in self.DEBUG_SCALAR_TOPICS.items()
+        }
 
         self.update_raceline_srv = self.create_service(
             UpdateRaceline, '/mppi/update_raceline', self.update_raceline_callback
@@ -568,6 +589,41 @@ class MPPI_Node(Node):
                         ))
             self.sampled_traj_marker_pub.publish(marker_array)
 
+    def publish_reward_debug(self, reference_traj):
+        if not any(pub.get_subscription_count() > 0 for pub in self.reward_debug_pubs.values()):
+            return
+
+        reward_weights = np.asarray([
+            self.config.xy_reward_weight,
+            self.config.velocity_reward_weight,
+            self.config.yaw_reward_weight,
+        ], dtype=np.float32)
+        cost_params = np.asarray([
+            self.config.wall_cost_weight if self.config.wall_cost_enabled else 0.0,
+            self.config.wall_cost_margin,
+            self.config.wall_cost_power,
+            self.config.slip_cost_weight if self.config.slip_cost_enabled else 0.0,
+            self.config.slip_cost_beta_safe,
+            self.config.latacc_cost_weight if self.config.latacc_cost_enabled else 0.0,
+            self.config.latacc_cost_safe,
+            self.config.steer_sat_cost_weight if self.config.steer_sat_cost_enabled else 0.0,
+            self.config.steer_sat_soft_ratio * self.config.max_steering_angle,
+        ], dtype=np.float32)
+
+        debug_terms = self.infer_env.reward_debug_terms(
+            numpify(self.mppi.traj_opt),
+            numpify(reference_traj),
+            reward_weights=reward_weights,
+            cost_params=cost_params,
+        )
+
+        for key, pub in self.reward_debug_pubs.items():
+            if pub.get_subscription_count() == 0:
+                continue
+            msg = Float32()
+            msg.data = float(debug_terms.get(key, 0.0))
+            pub.publish(msg)
+
     def pose_callback(self, pose_msg):
         """
         Callback function for subscribing to particle filter's  inferred pose.
@@ -660,6 +716,7 @@ class MPPI_Node(Node):
             arr_msg = to_multiarray_f32(opt_traj_cpu.astype(np.float32))
             self.opt_traj_pub.publish(arr_msg)
 
+        self.publish_reward_debug(reference_traj)
         self.publish_visualization(reference_traj)
 
         if twist.linear.x < self.config.init_vel:

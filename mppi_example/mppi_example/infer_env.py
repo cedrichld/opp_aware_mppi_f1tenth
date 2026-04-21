@@ -336,6 +336,126 @@ class InferEnv():
 
         return jnp.where(valid, self.wall_sdf[row, col], 0.0)
 
+    def reward_debug_terms(self, state, reference, reward_weights=None, cost_params=None):
+        if reward_weights is None:
+            reward_weights = np.asarray([
+                getattr(self.config, 'xy_reward_weight', 1.0),
+                getattr(self.config, 'velocity_reward_weight', 0.0),
+                getattr(self.config, 'yaw_reward_weight', 0.0),
+            ], dtype=np.float32)
+        else:
+            reward_weights = np.asarray(reward_weights, dtype=np.float32)
+
+        if cost_params is None:
+            cost_params = np.asarray([
+                getattr(self.config, 'wall_cost_weight', 0.0) if getattr(self.config, 'wall_cost_enabled', False) else 0.0,
+                getattr(self.config, 'wall_cost_margin', 0.0),
+                getattr(self.config, 'wall_cost_power', 2.0),
+                getattr(self.config, 'slip_cost_weight', 0.0) if getattr(self.config, 'slip_cost_enabled', False) else 0.0,
+                getattr(self.config, 'slip_cost_beta_safe', 0.0),
+                getattr(self.config, 'latacc_cost_weight', 0.0) if getattr(self.config, 'latacc_cost_enabled', False) else 0.0,
+                getattr(self.config, 'latacc_cost_safe', 0.0),
+                getattr(self.config, 'steer_sat_cost_weight', 0.0) if getattr(self.config, 'steer_sat_cost_enabled', False) else 0.0,
+                getattr(self.config, 'steer_sat_soft_ratio', 0.0) * getattr(self.config, 'max_steering_angle', 0.0),
+            ], dtype=np.float32)
+        else:
+            cost_params = np.asarray(cost_params, dtype=np.float32)
+
+        state = np.asarray(state, dtype=np.float32)
+        reference = np.asarray(reference, dtype=np.float32)
+
+        if state.ndim != 2 or state.shape[0] == 0:
+            return {
+                'reward_total_sum': 0.0,
+                'reward_total_mean': 0.0,
+                'reward_xy_sum': 0.0,
+                'reward_velocity_sum': 0.0,
+                'reward_yaw_sum': 0.0,
+                'cost_wall_sum': 0.0,
+                'cost_slip_sum': 0.0,
+                'cost_latacc_sum': 0.0,
+                'cost_steer_sat_sum': 0.0,
+                'min_wall_dist': 100.0,
+                'max_beta': 0.0,
+                'max_latacc': 0.0,
+                'max_abs_steer': 0.0,
+                'invalid_steps': 0.0,
+            }
+
+        ref = reference[1:]
+        n = min(state.shape[0], ref.shape[0])
+        state = state[:n]
+        ref = ref[:n]
+
+        invalid_penalty = (~np.isfinite(state).all(axis=1)).astype(np.float32) * 1e3
+        state_safe = np.nan_to_num(state, nan=1e3, posinf=1e3, neginf=-1e3)
+
+        xy_reward = -np.linalg.norm(ref[:, :2] - state_safe[:, :2], ord=1, axis=1)
+        vel_reward = -np.abs(ref[:, 2] - state_safe[:, 3])
+        yaw_reward = -np.abs(np.sin(ref[:, 3]) - np.sin(state_safe[:, 4])) - \
+            np.abs(np.cos(ref[:, 3]) - np.cos(state_safe[:, 4]))
+
+        weighted_xy = reward_weights[0] * xy_reward
+        weighted_vel = reward_weights[1] * vel_reward
+        weighted_yaw = reward_weights[2] * yaw_reward
+
+        wall_weight = float(cost_params[0])
+        wall_margin = float(cost_params[1])
+        wall_power = float(cost_params[2])
+        slip_weight = float(cost_params[3])
+        beta_safe = float(cost_params[4])
+        latacc_weight = float(cost_params[5])
+        latacc_safe = float(cost_params[6])
+        steer_sat_weight = float(cost_params[7])
+        steer_soft = float(cost_params[8])
+
+        if self.wall_sdf is not None:
+            wall_dist = np.asarray(self.sample_wall_distance(jnp.asarray(state_safe[:, :2])))
+        else:
+            wall_dist = np.ones((n,), dtype=np.float32) * 100.0
+        wall_penalty = np.maximum(0.0, wall_margin - wall_dist) ** wall_power
+        weighted_wall = wall_weight * wall_penalty
+
+        beta = np.abs(state_safe[:, 6])
+        slip_penalty = np.square(np.minimum(np.maximum(0.0, beta - beta_safe), 1e3))
+        weighted_slip = slip_weight * slip_penalty
+
+        latacc = np.abs(state_safe[:, 3] * state_safe[:, 5])
+        latacc_penalty = np.square(np.minimum(np.maximum(0.0, latacc - latacc_safe), 1e3))
+        weighted_latacc = latacc_weight * latacc_penalty
+
+        steer_abs = np.abs(state_safe[:, 2])
+        steer_penalty = np.square(np.minimum(np.maximum(0.0, steer_abs - steer_soft), 1e3))
+        weighted_steer = steer_sat_weight * steer_penalty
+
+        total = (
+            weighted_xy
+            + weighted_vel
+            + weighted_yaw
+            - invalid_penalty
+            - weighted_wall
+            - weighted_slip
+            - weighted_latacc
+            - weighted_steer
+        )
+
+        return {
+            'reward_total_sum': float(np.sum(total)),
+            'reward_total_mean': float(np.mean(total)),
+            'reward_xy_sum': float(np.sum(weighted_xy)),
+            'reward_velocity_sum': float(np.sum(weighted_vel)),
+            'reward_yaw_sum': float(np.sum(weighted_yaw)),
+            'cost_wall_sum': float(np.sum(weighted_wall)),
+            'cost_slip_sum': float(np.sum(weighted_slip)),
+            'cost_latacc_sum': float(np.sum(weighted_latacc)),
+            'cost_steer_sat_sum': float(np.sum(weighted_steer)),
+            'min_wall_dist': float(np.min(wall_dist)),
+            'max_beta': float(np.max(beta)),
+            'max_latacc': float(np.max(latacc)),
+            'max_abs_steer': float(np.max(steer_abs)),
+            'invalid_steps': float(np.count_nonzero(invalid_penalty > 0.0)),
+        }
+
 def load_wall_distance_field(map_yaml):
     map_yaml = Path(map_yaml).expanduser().resolve()
     with map_yaml.open('r', encoding='utf-8') as stream:
