@@ -34,7 +34,7 @@ def generate_launch_description():
     )
 
     pkg_share = get_package_share_directory('mppi_bringup')
-    csv_path = os.path.join(pkg_share, 'waypoints', 'skirk_bas', 'real_skirk1.csv')
+    csv_path = os.path.join(pkg_share, 'waypoints', 'skirk_bas', 'real_skirk2.csv')
 
     mppi_node = Node(
         package='mppi_example',
@@ -54,7 +54,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
                 'config',
-                'params_sim.yaml',
+                'params_sim_skirk.yaml',
             ]),
             description='YAML with MPPI ROS2 params',
         ),
@@ -68,7 +68,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
                 'maps',
-                'racetrack_levine_cleaned.yaml',
+                'skirk_bas1.yaml',
             ]),
             description='Static map yaml used to build the wall-distance cost field',
         ),
