@@ -3,23 +3,23 @@ lmppi_node:
     # Startup parameters: read once when the node starts. Restart MPPI after
     # changing these because they affect subscriptions, rollout array shapes,
     # JAX compilation, or the random sampling stream.
-    is_sim: true                  # true: /ego_racecar/odom; false: /pf/pose/odom.
+    is_sim: false                  # true: /ego_racecar/odom; false: /pf/pose/odom.
     state_predictor: dynamic_ST   # Rollout model. dynamic_ST includes yaw rate/slip; kinematic_ST is simpler.
-    n_samples: 2048               # Number of sampled control sequences. More is steadier but slower.
-    n_steps: 5                   # Rollout horizon length. At dt=0.1, 12 steps = 1.2s lookahead.
+    n_samples: 1024               # Number of sampled control sequences. More is steadier but slower.
+    n_steps: 8 #try lower                   # Rollout horizon length. At dt=0.1, 12 steps = 1.2s lookahead.
     sim_time_step: 0.1            # Rollout integration/control timestep used inside MPPI.
     random_seed: 527787           # Sampling seed. Keep fixed for repeatable tuning runs.
     render: true                  # true keeps optimal/sampled rollouts available for visualization.
 
     # Live tuning parameters: mppi_node.get_params() refreshes these on every
     # odometry callback, so they can be changed with ros2 param set.
-    temperature: 0.01             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
+    temperature: 0.05             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
     # damping: 0.001                # Prevents weight normalization issues when rollout rewards are similar.
-    # ref_vel: 5.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
-    init_vel: 4.0                 # Minimum speed assumed by the rollout model at startup/very low speed.
-    startup_speed: 2.0            # Minimum /drive.speed while measured speed is below init_vel.
-    use_pose_delta_state_estimate: false # Sim odom twist is already good; leave the hardware estimator off.
-    friction: 0.41 #kept 0.41 in sim still # Model-only tire/friction belief for dynamic_ST rollouts; tune empirically.
+    # ref_vel: 2.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
+    init_vel: 2.0                 # Minimum speed assumed by the rollout model at startup/very low speed.
+    startup_speed: 1.0            # Minimum /drive.speed while measured speed is below init_vel.
+    use_pose_delta_state_estimate: true # Real car: estimate vx / yaw-rate from PF pose deltas plus command prior.
+    friction: 0.41                # Model-only tire/friction belief for dynamic_ST rollouts; tune empirically.
     # n_iterations: 1               # MPPI update passes per odom callback. More can improve solve quality but costs time.
 
     # Use the MPPI raceline CSV vx_mps column for turn-aware reference spacing.
@@ -27,20 +27,20 @@ lmppi_node:
     # targets become slower in turns and faster on straights.
     use_waypoint_speed_profile: true   # true: use raceline vx_mps; false: use constant ref_vel spacing.
     speed_profile_scale: 1.0          # Multiplies raceline vx_mps. Raise to push pace; lower for stability.
-    speed_profile_min_speed: 4.5       # Lower clamp for reference/profile speed after scaling.
-    speed_profile_max_speed: 12.0      # Upper clamp for reference/profile speed after scaling.
-    speed_profile_lookahead_steps: 0   # Planning brake lookahead: min speed over current..N future ref steps.
+    speed_profile_min_speed: 2.0       # Lower clamp for reference/profile speed after scaling.
+    speed_profile_max_speed: 6.0      # Upper clamp for reference/profile speed after scaling.
+    speed_profile_lookahead_steps: 3   # Planning brake lookahead: min speed over current..N future ref steps.
     speed_profile_iterations: 3        # Rebuild reference using profiled speeds this many times; 2-3 is enough.
 
     # Feedforward from raceline vx_mps to /drive.speed. MPPI still
     # supplies steering and can still pull speed through the blend term when
     # blend is below 1.0 (1.0 is much better in sim)
     use_speed_profile_drive_speed: false      # true: blend profile speed into final /drive.speed command.
-    speed_profile_drive_blend: 0.5           # 0 = pure MPPI accel command; 1 = pure raceline/profile speed command.
-    speed_profile_drive_lookahead_steps: 3   # Command brake lookahead: which future ref speed drives /drive.speed.
-    speed_profile_drive_use_min_lookahead: true # true: use min speed through lookahead to avoid early exit accel.
-    speed_profile_drive_max_accel: 15.0       # Max commanded speed increase in m/s^2, using real callback dt.
-    speed_profile_drive_max_decel: 15.0      # Max commanded speed decrease in m/s^2; usually higher than accel.
+    # speed_profile_drive_blend: 0.5           # 0 = pure MPPI accel command; 1 = pure raceline/profile speed command.
+    # speed_profile_drive_lookahead_steps: 3   # Command brake lookahead: which future ref speed drives /drive.speed.
+    # speed_profile_drive_use_min_lookahead: true # true: use min speed through lookahead to avoid early exit accel.
+    # speed_profile_drive_max_accel: 2.5       # Max commanded speed increase in m/s^2, using real callback dt.
+    # speed_profile_drive_max_decel: 8.0       # Max commanded speed decrease in m/s^2; usually higher than accel.
 
     # MPPI control exploration.
     control_sample_std_steer: 0.5      # Std dev of normalized steering-rate noise. Higher explores sharper turns.
@@ -61,13 +61,13 @@ lmppi_node:
 
     wall_cost_enabled: false
     wall_cost_weight: 50.0
-    wall_cost_margin: 0.2
+    wall_cost_margin: 0.25
     wall_cost_power: 2.0
     wall_cost_map_yaml: '' #injected by launch
 
     slip_cost_enabled: false
-    slip_cost_weight: 5.0
-    slip_cost_beta_safe: 0.5
+    slip_cost_weight: 2.0
+    slip_cost_beta_safe: 0.4
 
     latacc_cost_enabled: false
     latacc_cost_weight: 3.0
@@ -83,7 +83,7 @@ lmppi_node:
     ######################################################
     # Output safety clamps.
     min_speed: 0.0                    # Final /drive.speed lower clamp.
-    max_speed: 20.0                   # Final /drive.speed upper clamp; profile/feedforward usually limits first.
+    max_speed: 12.0                   # Final /drive.speed upper clamp; profile/feedforward usually limits first.
     max_steering_angle: 0.4189        # Final steering angle clamp, matching F1TENTH steering limit.
 
     # RViz visualization. Add MarkerArray displays for these topics:

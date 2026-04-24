@@ -474,6 +474,11 @@ $$
 4. **Increase `n_steps`**: 10 → 15 or 20 for longer lookahead. Important at higher speeds.
 5. **Adjust `ref_vel`**: this mostly changes how far ahead the reference points are spaced. Increase as the car gets stable, but remember velocity tracking needs a meaningful speed column in the reference.
 
+**Keep in mind from later tuning work:**
+
+- **Keep `init_vel` close to `speed_profile_min_speed`**: if they are far apart, the controller can start in a mismatched regime where the state estimate thinks the car should already be moving at one speed while the reference profile assumes another.
+- **In sim, good results can come from physically accurate MPPI even without extra costs**: once friction and horizon are tuned correctly, the controller can run very well with just the core tracking objective. In that regime, `use_speed_profile_drive_speed` and the drive-speed blend can actually make tuning harder by mixing profile feedforward into what should be a clean test of the MPPI physics/model.
+
 ### 4.2 Cost Function Improvements (modify infer_env.py)
 
 The current cost only tracks position. For racing, you want:

@@ -54,7 +54,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
                 'config',
-                'params_real.yaml',
+                'params_lev.yaml',
             ]),
             description='YAML with MPPI ROS2 params for actual car',
         ),
