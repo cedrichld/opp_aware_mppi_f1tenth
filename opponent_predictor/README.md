@@ -8,39 +8,39 @@ The key idea is to predict in **track progress coordinates** instead of raw Cart
 
 The filter state is:
 
-2
+$$
 \mathbf{x} =
 \begin{bmatrix}
 s \\
 v
 \end{bmatrix}
-2
+$$
 
 where:
 
-2
+$$
 s = \text{distance/progress along the raceline}
-2
+$$
 
-2
+$$
 v = \dot{s}
-2
+$$
 
 The opponent odometry gives a Cartesian pose:
 
-2
+$$
 \mathbf{p} =
 \begin{bmatrix}
 x \\
 y
 \end{bmatrix}
-2
+$$
 
 That pose is projected onto the raceline to obtain:
 
-2
+$$
 s_{\text{meas}}, \quad e_y, \quad d_{\text{proj}}
-2
+$$
 
 where $e_y$ is the signed lateral offset from the raceline and $d_{\text{proj}}$ is the projection distance.
 
@@ -48,7 +48,7 @@ where $e_y$ is the signed lateral offset from the raceline and $d_{\text{proj}}$
 
 For each raceline segment with endpoints $\mathbf{p}_i$ and $\mathbf{p}_{i+1}$, compute:
 
-2
+$$
 \alpha =
 \text{clip}
 \left(
@@ -57,36 +57,36 @@ For each raceline segment with endpoints $\mathbf{p}_i$ and $\mathbf{p}_{i+1}$, 
 0,
 1
 \right)
-2
+$$
 
 The projected point is:
 
-2
+$$
 \mathbf{p}_{\text{proj}} =
 \mathbf{p}_i + \alpha(\mathbf{p}_{i+1}-\mathbf{p}_i)
-2
+$$
 
 The measured track progress is:
 
-2
+$$
 s_{\text{meas}} =
 s_i + \alpha(s_{i+1}-s_i)
-2
+$$
 
 The signed lateral offset is:
 
-2
+$$
 e_y =
 (\mathbf{p} - \mathbf{p}_{\text{proj}})^T\mathbf{n}_i
-2
+$$
 
 where $\mathbf{n}_i$ is the raceline normal.
 
 Because the track is closed, $s$ is wrapped to:
 
-2
+$$
 s \in [0, L)
-2
+$$
 
 where $L$ is the total track length. When computing differences between two progress values, the predictor unwraps $s$ so crossing the start line does not look like a large jump.
 
@@ -94,33 +94,33 @@ where $L$ is the total track length. When computing differences between two prog
 
 The primary speed measurement is progress speed:
 
-2
+$$
 v_{\text{meas}} =
 \frac{s_t - s_{t-1}}{\Delta t}
-2
+$$
 
 This is preferred over raw odometry twist because the predictor cares about how quickly the opponent is moving along the track.
 
 The measurement is rejected or clamped if it is physically unreasonable:
 
-2
+$$
 0 \le v_{\text{meas}} \le v_{\max}
-2
+$$
 
 and speed changes can be limited with:
 
-2
+$$
 |v_{\text{meas},t} - v_{\text{meas},t-1}|
 \le
 a_{\max}\Delta t
-2
+$$
 
 If progress speed is unavailable or invalid, the node falls back to twist magnitude:
 
-2
+$$
 v_{\text{twist}} =
 \sqrt{v_x^2 + v_y^2 + v_z^2}
-2
+$$
 
 If both are poor, it can fall back to the raceline profile speed at the current progress.
 
@@ -128,60 +128,60 @@ If both are poor, it can fall back to the raceline profile speed at the current 
 
 The predictor uses a constant-velocity Kalman filter in raceline progress:
 
-2
+$$
 \mathbf{x}_{k+1}
 =
 \mathbf{A}\mathbf{x}_k
-2
+$$
 
-2
+$$
 \mathbf{A}
 =
 \begin{bmatrix}
 1 & \Delta t \\
 0 & 1
 \end{bmatrix}
-2
+$$
 
 Equivalently:
 
-2
+$$
 s_{k+1} = s_k + v_k\Delta t
-2
+$$
 
-2
+$$
 v_{k+1} = v_k
-2
+$$
 
 The measurement is:
 
-2
+$$
 \mathbf{z}_k =
 \begin{bmatrix}
 s_{\text{meas}} \\
 v_{\text{meas}}
 \end{bmatrix}
-2
+$$
 
 with measurement model:
 
-2
+$$
 \mathbf{z}_k =
 \mathbf{H}\mathbf{x}_k
-2
+$$
 
-2
+$$
 \mathbf{H}
 =
 \begin{bmatrix}
 1 & 0 \\
 0 & 1
 \end{bmatrix}
-2
+$$
 
 This is a standard linear Kalman filter, not an EKF. A constant-acceleration model with state $[s, v, a]^T$ would also still be linear:
 
-2
+$$
 \begin{bmatrix}
 s_{k+1} \\
 v_{k+1} \\
@@ -198,7 +198,7 @@ s_k \\
 v_k \\
 a_k
 \end{bmatrix}
-2
+$$
 
 We currently prefer the constant-velocity model because acceleration estimates would require differentiating noisy projected speed measurements. The raceline speed profile already provides a cleaner way to bias future prediction toward slowing for turns and speeding up on straights.
 
@@ -206,19 +206,19 @@ We currently prefer the constant-velocity model because acceleration estimates w
 
 For visualization and obstacle-cost anchoring, the current predicted pose should not lag behind the measured opponent pose. After the Kalman update, the progress estimate is optionally snapped toward the latest measurement:
 
-2
+$$
 s_{\text{hat}}
 \leftarrow
 (1-\alpha_{\text{snap}})s_{\text{hat}}
 +
 \alpha_{\text{snap}}s_{\text{meas}}
-2
+$$
 
 With:
 
-2
+$$
 \alpha_{\text{snap}} = 1
-2
+$$
 
 the current marker is anchored to the newest odometry projection, while velocity remains filtered.
 
@@ -226,37 +226,37 @@ the current marker is anchored to the newest odometry projection, while velocity
 
 The prediction horizon starts from the filtered current state:
 
-2
+$$
 s_0 = s_{\text{hat}}
-2
+$$
 
-2
+$$
 v_0 = v_{\text{hat}}
-2
+$$
 
 At each future step, the position is obtained by interpolating the raceline:
 
-2
+$$
 \mathbf{p}_k = \mathbf{r}(s_k)
-2
+$$
 
 The future speed is blended toward the raceline speed profile:
 
-2
+$$
 v_{k+1}
 =
 (1-\beta)v_k
 +
 \beta v_{\text{profile}}(s_k)
-2
+$$
 
 Then progress advances:
 
-2
+$$
 s_{k+1}
 =
 s_k + v_{k+1}\Delta t
-2
+$$
 
 When the opponent is visible, $\beta$ is `profile_speed_blend`. When the opponent is stale or temporarily out of sight, $\beta$ becomes `out_of_sight_profile_speed_blend`.
 
@@ -270,17 +270,17 @@ This means:
 
 The opponent is not forced exactly onto the raceline. The node filters the measured lateral offset:
 
-2
+$$
 e_{y,\text{hat}}
 \leftarrow
 (1-\alpha_y)e_{y,\text{hat}}
 +
 \alpha_y e_{y,\text{meas}}
-2
+$$
 
 Future lateral offset decays back toward the raceline:
 
-2
+$$
 e_y(k)
 =
 e_{y,\text{hat}}
@@ -288,15 +288,15 @@ e_{y,\text{hat}}
 \left(
 -\frac{k\Delta t}{\tau_y}
 \right)
-2
+$$
 
 The final predicted position is:
 
-2
+$$
 \mathbf{p}^{\text{pred}}_k
 =
 \mathbf{r}(s_k) + e_y(k)\mathbf{n}(s_k)
-2
+$$
 
 This lets the prediction start from the opponent's measured side of the track, while assuming it gradually returns toward the reference.
 
@@ -379,7 +379,7 @@ This lets the prediction start from the opponent's measured side of the track, w
 `/opponent/debug`
 : Debug vector:
 
-2
+$$
 \begin{bmatrix}
 s_{\text{proj}} &
 v_{\text{hat}} &
@@ -390,7 +390,7 @@ d_{\text{proj}} &
 e_{y,\text{hat}} &
 \text{stale}
 \end{bmatrix}
-2
+$$
 
 ## Algorithm Summary
 

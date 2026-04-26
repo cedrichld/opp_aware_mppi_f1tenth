@@ -120,7 +120,7 @@ public:
     lateral_offset_alpha_ = std::clamp(
       declare_parameter<double>("lateral_offset_alpha", 0.35), 0.0, 1.0);
     lateral_offset_decay_time_ = std::max(
-      1e-3, declare_parameter<double>("lateral_offset_decay_time", 1.0));
+      1e-3, declare_parameter<double>("lateral_offset_decay_time", 0.3));
     position_snap_alpha_ = std::clamp(
       declare_parameter<double>("position_snap_alpha", 1.0), 0.0, 1.0);
     initial_speed_ = std::max(0.0, declare_parameter<double>("initial_speed", 1.0));
