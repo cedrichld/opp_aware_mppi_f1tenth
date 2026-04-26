@@ -1,9 +1,10 @@
-# cbf_mppi_f1tenth
+# Opponent-Aware MPPI for F1TENTH Racing
 
-ROS 2 packages running a JAX-based MPPI controller on F1TENTH cars in sim and
-on the real car. Forked from
-[mlab-upenn/mppi_example](https://github.com/mlab-upenn/mppi_example)
-(MIT, © 2025 xLab for Safe Autonomous Systems).
+ROS 2 packages running a JAX-based MPPI controller for aggresive performance and opponent prediction + overtaking on F1TENTH cars (sim + real). Built off of [mlab-upenn/mppi_example](https://github.com/mlab-upenn/mppi_example) (MIT, © 2025 xLab for Safe Autonomous Systems).
+
+**Project focus:** high-speed raceline tracking with MPPI, extended toward
+opponent-aware prediction, avoidance, and overtaking behavior for F1TENTH
+racing.
 
 ![MPPI sim run on Skirk](media/mppi_sim_skirk.gif)
 
@@ -41,14 +42,17 @@ controller on the fly.
   `mppi_tracking.py` (JAX rollout loop), `dynamics_models/` (vehicle models).
 - `mppi_bringup/` — launch files, params, waypoint CSVs (Levine 9-column
   format under `waypoints/sim/`).
+- `opponent_predictor/` — raceline-progress opponent prediction from odometry,
+  with Foxglove/RViz visualization and debug topics.
 - `MPPI_GUIDE.md` — math, code map, tuning notes.
-- `CBF_MPPI_README.md` — obstacle-aware CBF extension (WIP).
+- `CBF_MPPI_README.md` — earlier notes on CBFs; not the current primary
+  project direction.
 
 ## Build
 
 ```bash
 cd ~/ros2_ws/roboracer_ws
-colcon build --packages-select mppi_example mppi_bringup
+colcon build --packages-select mppi_example mppi_bringup opponent_predictor
 source install/setup.bash
 ```
 

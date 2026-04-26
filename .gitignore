@@ -13,3 +13,6 @@ __pycache__/
 
 # Bags
 bags/
+
+# Remove jup large file
+*.ipynb
