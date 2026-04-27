@@ -103,14 +103,16 @@ class InferEnv():
         self.waypoints_distances = np.linalg.norm(self.waypoints[1:, (1, 2)] - self.waypoints[:-1, (1, 2)], axis=1)
     
     @partial(jax.jit, static_argnums=(0,))
-    def reward_fn_xy(self, state, reference, reward_weights=None, cost_params=None):
+    def reward_fn_xy(self, state, reference, reward_weights=None, cost_params=None, opponent_traj=None):
         """
         reward function for the state s with respect to the reference trajectory
         """
         if reward_weights is None:
             reward_weights = jnp.array([1.0, 0.0, 0.0])
         if cost_params is None:
-            cost_params = jnp.zeros((9,), dtype=jnp.float32)
+            cost_params = jnp.zeros((13,), dtype=jnp.float32)
+        if opponent_traj is None:
+            opponent_traj = jnp.zeros((state.shape[0], 2), dtype=jnp.float32)
         invalid_penalty = (~jnp.isfinite(state).all(axis=1)).astype(jnp.float32) * 1e3
         state_safe = jnp.nan_to_num(state, nan=1e3, posinf=1e3, neginf=-1e3)
         xy_reward = -jnp.linalg.norm(reference[1:, :2] - state_safe[:, :2], ord=1, axis=1)
@@ -134,6 +136,10 @@ class InferEnv():
         latacc_safe = cost_params[6]
         steer_sat_weight = cost_params[7]
         steer_soft = cost_params[8]
+        opponent_weight = cost_params[9]
+        opponent_radius = cost_params[10]
+        opponent_power = cost_params[11]
+        opponent_discount = cost_params[12]
 
         if self.wall_sdf is not None:
             wall_dist = self.sample_wall_distance(state_safe[:, :2])
@@ -151,6 +157,12 @@ class InferEnv():
         steer_abs = jnp.abs(state_safe[:, 2])
         steer_penalty = self.safe_hinge_square(steer_abs, steer_soft)
         reward -= steer_sat_weight * steer_penalty
+
+        opponent_xy = opponent_traj[:state_safe.shape[0], :2]
+        opponent_dist = jnp.linalg.norm(state_safe[:, :2] - opponent_xy, axis=1)
+        opponent_penalty = jnp.maximum(0.0, opponent_radius - opponent_dist) ** opponent_power
+        opponent_discount_steps = opponent_discount ** jnp.arange(state_safe.shape[0], dtype=jnp.float32)
+        reward -= opponent_weight * opponent_discount_steps * opponent_penalty
             
         return reward
 
@@ -336,7 +348,7 @@ class InferEnv():
 
         return jnp.where(valid, self.wall_sdf[row, col], 0.0)
 
-    def reward_debug_terms(self, state, reference, reward_weights=None, cost_params=None):
+    def reward_debug_terms(self, state, reference, reward_weights=None, cost_params=None, opponent_traj=None):
         if reward_weights is None:
             reward_weights = np.asarray([
                 getattr(self.config, 'xy_reward_weight', 1.0),
@@ -357,6 +369,10 @@ class InferEnv():
                 getattr(self.config, 'latacc_cost_safe', 0.0),
                 getattr(self.config, 'steer_sat_cost_weight', 0.0) if getattr(self.config, 'steer_sat_cost_enabled', False) else 0.0,
                 getattr(self.config, 'steer_sat_soft_ratio', 0.0) * getattr(self.config, 'max_steering_angle', 0.0),
+                getattr(self.config, 'opponent_cost_weight', 0.0) if getattr(self.config, 'opponent_cost_enabled', False) else 0.0,
+                getattr(self.config, 'opponent_cost_radius', 0.8),
+                getattr(self.config, 'opponent_cost_power', 2.0),
+                getattr(self.config, 'opponent_cost_discount', 1.0),
             ], dtype=np.float32)
         else:
             cost_params = np.asarray(cost_params, dtype=np.float32)
@@ -378,7 +394,9 @@ class InferEnv():
                 'cost_slip_sum': 0.0,
                 'cost_latacc_sum': 0.0,
                 'cost_steer_sat_sum': 0.0,
+                'cost_opponent_sum': 0.0,
                 'min_wall_dist': 100.0,
+                'min_opponent_dist': 100.0,
                 'max_beta': 0.0,
                 'max_latacc': 0.0,
                 'max_abs_steer': 0.0,
@@ -411,6 +429,10 @@ class InferEnv():
         latacc_safe = float(cost_params[6])
         steer_sat_weight = float(cost_params[7])
         steer_soft = float(cost_params[8])
+        opponent_weight = float(cost_params[9])
+        opponent_radius = float(cost_params[10])
+        opponent_power = float(cost_params[11])
+        opponent_discount = float(cost_params[12])
 
         if self.wall_sdf is not None:
             wall_dist = np.asarray(self.sample_wall_distance(jnp.asarray(state_safe[:, :2])))
@@ -431,6 +453,18 @@ class InferEnv():
         steer_penalty = np.square(np.minimum(np.maximum(0.0, steer_abs - steer_soft), 1e3))
         weighted_steer = steer_sat_weight * steer_penalty
 
+        if opponent_traj is None:
+            opponent_xy = np.zeros((n, 2), dtype=np.float32)
+        else:
+            opponent_xy = np.asarray(opponent_traj, dtype=np.float32)[:n, :2]
+        if opponent_xy.shape[0] < n:
+            pad = np.repeat(opponent_xy[-1:, :], n - opponent_xy.shape[0], axis=0) if opponent_xy.shape[0] else np.zeros((n, 2), dtype=np.float32)
+            opponent_xy = np.vstack([opponent_xy, pad])
+        opponent_dist = np.linalg.norm(state_safe[:, :2] - opponent_xy, axis=1)
+        opponent_penalty = np.maximum(0.0, opponent_radius - opponent_dist) ** opponent_power
+        opponent_discount_steps = opponent_discount ** np.arange(n, dtype=np.float32)
+        weighted_opponent = opponent_weight * opponent_discount_steps * opponent_penalty
+
         total = (
             weighted_xy
             + weighted_vel
@@ -440,8 +474,9 @@ class InferEnv():
             - weighted_slip
             - weighted_latacc
             - weighted_steer
+            - weighted_opponent
         )
-        total_cost = invalid_penalty + weighted_wall + weighted_slip + weighted_latacc + weighted_steer
+        total_cost = invalid_penalty + weighted_wall + weighted_slip + weighted_latacc + weighted_steer + weighted_opponent
 
         return {
             'reward_total_sum': float(np.sum(total)),
@@ -456,7 +491,9 @@ class InferEnv():
             'cost_slip_sum': float(np.sum(weighted_slip)),
             'cost_latacc_sum': float(np.sum(weighted_latacc)),
             'cost_steer_sat_sum': float(np.sum(weighted_steer)),
+            'cost_opponent_sum': float(np.sum(weighted_opponent)),
             'min_wall_dist': float(np.min(wall_dist)),
+            'min_opponent_dist': float(np.min(opponent_dist)),
             'max_beta': float(np.max(beta)),
             'max_latacc': float(np.max(latacc)),
             'max_abs_steer': float(np.max(steer_abs)),

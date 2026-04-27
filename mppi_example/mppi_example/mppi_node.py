@@ -8,7 +8,7 @@ import jax.numpy as jnp
 
 import rclpy
 from rclpy.node import Node
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path as NavPath
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Point
 from std_msgs.msg import Float32, Float32MultiArray
@@ -57,7 +57,11 @@ class MPPI_Node(Node):
         'cost_slip_sum': '/mppi/debug/cost_slip_sum',
         'cost_latacc_sum': '/mppi/debug/cost_latacc_sum',
         'cost_steer_sat_sum': '/mppi/debug/cost_steer_sat_sum',
+        'cost_opponent_sum': '/mppi/debug/cost_opponent_sum',
         'min_wall_dist': '/mppi/debug/min_wall_dist',
+        'min_opponent_dist': '/mppi/debug/min_opponent_dist',
+        'opponent_path_age': '/mppi/debug/opponent_path_age',
+        'opponent_active': '/mppi/debug/opponent_active',
         'max_beta': '/mppi/debug/max_beta',
         'max_latacc': '/mppi/debug/max_latacc',
         'max_abs_steer': '/mppi/debug/max_abs_steer',
@@ -101,7 +105,14 @@ class MPPI_Node(Node):
         self.control = np.asarray([0.0, 0.0])
         reference_traj, waypoint_ind = self.infer_env.get_refernece_traj(state_c_0.copy(), self.config.ref_vel, self.config.n_steps)
         
-        self.mppi.update(jnp.asarray(state_c_0), jnp.asarray(reference_traj))
+        self.opponent_xy_horizon = np.zeros((self.config.n_steps, 2), dtype=np.float32)
+        self.opponent_path_time = None
+        self.mppi.update(
+            jnp.asarray(state_c_0),
+            jnp.asarray(reference_traj),
+            jnp.asarray(self.opponent_xy_horizon),
+            False,
+        )
         self.get_logger().info('MPPI initialized')
         self.hz = []
         self.last_speed_command_time = None
@@ -123,6 +134,12 @@ class MPPI_Node(Node):
             self.pose_sub = self.create_subscription(Odometry, "/ego_racecar/odom", self.pose_callback, qos)
         else:
             self.pose_sub = self.create_subscription(Odometry, "/pf/pose/odom", self.pose_callback, qos)
+        self.opponent_path_sub = self.create_subscription(
+            NavPath,
+            self.config.opponent_path_topic,
+            self.opponent_path_callback,
+            qos,
+        )
         # publishers
         self.drive_pub = self.create_publisher(AckermannDriveStamped, "/drive", qos)
         self.reference_pub = self.create_publisher(Float32MultiArray, "/reference_arr", qos)
@@ -224,6 +241,13 @@ class MPPI_Node(Node):
             'wall_cost_margin': 0.3,
             'wall_cost_power': 2.0,
             'wall_cost_map_yaml': '',
+            'opponent_path_topic': '/opponent/predicted_path',
+            'opponent_cost_enabled': False,
+            'opponent_cost_weight': 0.0,
+            'opponent_cost_radius': 0.8,
+            'opponent_cost_power': 2.0,
+            'opponent_cost_discount': 1.0,
+            'opponent_path_timeout': 0.5,
             'slip_cost_enabled': False,
             'slip_cost_weight': 0.0,
             'slip_cost_beta_safe': 0.2,
@@ -249,6 +273,7 @@ class MPPI_Node(Node):
             'wpt_path_absolute': bool(self.config.wpt_path_absolute),
             'wpt_path': str(self.config.wpt_path),
             'wall_cost_map_yaml': str(self.config.wall_cost_map_yaml),
+            'opponent_path_topic': str(self.config.opponent_path_topic),
             'map_dir': str(self.config.map_dir),
             'map_ind': int(self.config.map_ind),
             'state_predictor': str(self.config.state_predictor),
@@ -278,6 +303,12 @@ class MPPI_Node(Node):
             'wall_cost_weight': float(self.config.wall_cost_weight),
             'wall_cost_margin': float(self.config.wall_cost_margin),
             'wall_cost_power': float(self.config.wall_cost_power),
+            'opponent_cost_enabled': bool(self.config.opponent_cost_enabled),
+            'opponent_cost_weight': float(self.config.opponent_cost_weight),
+            'opponent_cost_radius': float(self.config.opponent_cost_radius),
+            'opponent_cost_power': float(self.config.opponent_cost_power),
+            'opponent_cost_discount': float(self.config.opponent_cost_discount),
+            'opponent_path_timeout': float(self.config.opponent_path_timeout),
             'slip_cost_enabled': bool(self.config.slip_cost_enabled),
             'slip_cost_weight': float(self.config.slip_cost_weight),
             'slip_cost_beta_safe': float(self.config.slip_cost_beta_safe),
@@ -320,6 +351,7 @@ class MPPI_Node(Node):
             self.config.wpt_path_absolute = bool(self.get_parameter('wpt_path_absolute').value)
             self.config.wpt_path = str(self.get_parameter('wpt_path').value)
             self.config.wall_cost_map_yaml = str(self.get_parameter('wall_cost_map_yaml').value)
+            self.config.opponent_path_topic = str(self.get_parameter('opponent_path_topic').value)
             self.config.map_dir = str(self.get_parameter('map_dir').value)
             self.config.map_ind = int(self.get_parameter('map_ind').value)
             self.config.state_predictor = str(self.get_parameter('state_predictor').value)
@@ -365,6 +397,28 @@ class MPPI_Node(Node):
         self.config.wall_cost_power = max(
             1.0,
             float(self.get_parameter('wall_cost_power').value),
+        )
+        self.config.opponent_cost_enabled = bool(self.get_parameter('opponent_cost_enabled').value)
+        self.config.opponent_cost_weight = max(
+            0.0,
+            float(self.get_parameter('opponent_cost_weight').value),
+        )
+        self.config.opponent_cost_radius = max(
+            0.0,
+            float(self.get_parameter('opponent_cost_radius').value),
+        )
+        self.config.opponent_cost_power = max(
+            1.0,
+            float(self.get_parameter('opponent_cost_power').value),
+        )
+        self.config.opponent_cost_discount = float(np.clip(
+            float(self.get_parameter('opponent_cost_discount').value),
+            0.0,
+            1.0,
+        ))
+        self.config.opponent_path_timeout = max(
+            0.0,
+            float(self.get_parameter('opponent_path_timeout').value),
         )
         self.config.slip_cost_enabled = bool(self.get_parameter('slip_cost_enabled').value)
         self.config.slip_cost_weight = max(
@@ -505,6 +559,51 @@ class MPPI_Node(Node):
     @staticmethod
     def stamp_to_sec(stamp):
         return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+    def opponent_path_callback(self, msg):
+        poses = list(msg.poses)
+        if not poses:
+            return
+
+        start_idx = 1 if len(poses) > 1 else 0
+        points = []
+        for stamped_pose in poses[start_idx:start_idx + self.config.n_steps]:
+            point = stamped_pose.pose.position
+            if np.isfinite(point.x) and np.isfinite(point.y):
+                points.append([float(point.x), float(point.y)])
+
+        if not points:
+            return
+
+        horizon = np.asarray(points, dtype=np.float32)
+        if horizon.shape[0] < self.config.n_steps:
+            last = horizon[-1:, :]
+            pad = np.repeat(last, self.config.n_steps - horizon.shape[0], axis=0)
+            horizon = np.vstack([horizon, pad])
+
+        self.opponent_xy_horizon = horizon[:self.config.n_steps]
+        self.opponent_path_time = time.time()
+
+    def get_opponent_horizon(self):
+        horizon = np.asarray(self.opponent_xy_horizon, dtype=np.float32)
+        if horizon.shape != (self.config.n_steps, 2):
+            fixed = np.zeros((self.config.n_steps, 2), dtype=np.float32)
+            rows = min(horizon.shape[0], self.config.n_steps) if horizon.ndim == 2 else 0
+            if rows > 0:
+                fixed[:rows, :] = horizon[:rows, :2]
+                fixed[rows:, :] = fixed[rows - 1:rows, :]
+            horizon = fixed
+
+        if self.opponent_path_time is None:
+            return horizon, False, np.inf
+
+        age = time.time() - self.opponent_path_time
+        active = (
+            self.config.opponent_cost_enabled
+            and age <= self.config.opponent_path_timeout
+            and np.isfinite(horizon).all()
+        )
+        return horizon, active, age
 
     def reset_state_estimator(self):
         self.prev_pose_time = None
@@ -710,7 +809,7 @@ class MPPI_Node(Node):
                         ))
             self.sampled_traj_marker_pub.publish(marker_array)
 
-    def publish_reward_debug(self, reference_traj):
+    def publish_reward_debug(self, reference_traj, opponent_traj=None, opponent_active=False, opponent_age=np.inf):
         if not any(pub.get_subscription_count() > 0 for pub in self.reward_debug_pubs.values()):
             return
 
@@ -729,6 +828,10 @@ class MPPI_Node(Node):
             self.config.latacc_cost_safe,
             self.config.steer_sat_cost_weight if self.config.steer_sat_cost_enabled else 0.0,
             self.config.steer_sat_soft_ratio * self.config.max_steering_angle,
+            self.config.opponent_cost_weight if (self.config.opponent_cost_enabled and opponent_active) else 0.0,
+            self.config.opponent_cost_radius,
+            self.config.opponent_cost_power,
+            self.config.opponent_cost_discount,
         ], dtype=np.float32)
 
         debug_terms = self.infer_env.reward_debug_terms(
@@ -736,7 +839,12 @@ class MPPI_Node(Node):
             numpify(reference_traj),
             reward_weights=reward_weights,
             cost_params=cost_params,
+            opponent_traj=opponent_traj,
         )
+        debug_terms['opponent_path_age'] = float(opponent_age) if np.isfinite(opponent_age) else -1.0
+        debug_terms['opponent_active'] = 1.0 if opponent_active else 0.0
+        if not opponent_active:
+            debug_terms['min_opponent_dist'] = -1.0
 
         for key, pub in self.reward_debug_pubs.items():
             if pub.get_subscription_count() == 0:
@@ -781,9 +889,15 @@ class MPPI_Node(Node):
         find_waypoint_vel = max(self.config.ref_vel, vx_state)
         
         reference_traj, waypoint_ind = self.infer_env.get_refernece_traj(state_c_0, find_waypoint_vel, self.config.n_steps)
+        opponent_traj, opponent_active, opponent_age = self.get_opponent_horizon()
 
         ## MPPI call
-        self.mppi.update(jnp.asarray(state_c_0), jnp.asarray(reference_traj))
+        self.mppi.update(
+            jnp.asarray(state_c_0),
+            jnp.asarray(reference_traj),
+            jnp.asarray(opponent_traj),
+            opponent_active,
+        )
         mppi_control = numpify(self.mppi.a_opt[0]) * self.config.norm_params[0, :2]/2
         prev_speed_command = float(self.control[1])
         mppi_speed_command = float(mppi_control[1]) * self.config.sim_time_step + vx_state
@@ -842,7 +956,7 @@ class MPPI_Node(Node):
             arr_msg = to_multiarray_f32(opt_traj_cpu.astype(np.float32))
             self.opt_traj_pub.publish(arr_msg)
 
-        self.publish_reward_debug(reference_traj)
+        self.publish_reward_debug(reference_traj, opponent_traj, opponent_active, opponent_age)
         self.publish_visualization(reference_traj)
 
         if vx_state < self.config.init_vel:

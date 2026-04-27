@@ -65,6 +65,16 @@ lmppi_node:
     wall_cost_power: 2.0
     wall_cost_map_yaml: '' #injected by launch
 
+    # Opponent-aware MPPI cost. Keep disabled until /opponent/predicted_path
+    # is healthy, then tune weight/radius live with ros2 param set.
+    opponent_path_topic: /opponent/predicted_path
+    opponent_cost_enabled: false
+    opponent_cost_weight: 0.0
+    opponent_cost_radius: 0.8
+    opponent_cost_power: 2.0
+    opponent_cost_discount: 1.0
+    opponent_path_timeout: 0.5
+
     slip_cost_enabled: true
     slip_cost_weight: 5.0
     slip_cost_beta_safe: 0.5

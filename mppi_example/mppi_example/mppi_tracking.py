@@ -42,8 +42,12 @@ class MPPI():
             self.a_cov_init = self.a_cov
             
             
-    def update(self, env_state, reference_traj):
-        a_std, temperature, damping, reward_weights, cost_params, norm_params, friction = self.runtime_params()
+    def update(self, env_state, reference_traj, opponent_traj=None, opponent_active=False):
+        if opponent_traj is None:
+            opponent_traj = jnp.zeros((self.n_steps, 2), dtype=jnp.float32)
+        a_std, temperature, damping, reward_weights, cost_params, norm_params, friction = self.runtime_params(
+            opponent_active=opponent_active
+        )
         self.a_opt, self.a_cov = self.shift_prev_opt(self.a_opt, self.a_cov, a_std)
         for _ in range(self.n_iterations):
             self.a_opt, self.a_cov, self.states, self.traj_opt = self.iteration_step(
@@ -59,6 +63,7 @@ class MPPI():
                 cost_params,
                 norm_params,
                 friction,
+                opponent_traj,
             )
         
         if self.track is not None and self.config.state_predictor in self.config.cartesian_models:
@@ -67,12 +72,16 @@ class MPPI():
         self.sampled_states = self.states
 
 
-    def runtime_params(self):
+    def runtime_params(self, opponent_active=False):
         reward_weights = [
             getattr(self.config, 'xy_reward_weight', 1.0),
             getattr(self.config, 'velocity_reward_weight', 0.0),
             getattr(self.config, 'yaw_reward_weight', 0.0),
         ]
+        opponent_enabled = (
+            getattr(self.config, 'opponent_cost_enabled', False)
+            and opponent_active
+        )
         cost_params = [
             getattr(self.config, 'wall_cost_weight', 0.0) if getattr(self.config, 'wall_cost_enabled', False) else 0.0,
             getattr(self.config, 'wall_cost_margin', 0.0),
@@ -83,6 +92,10 @@ class MPPI():
             getattr(self.config, 'latacc_cost_safe', 0.0),
             getattr(self.config, 'steer_sat_cost_weight', 0.0) if getattr(self.config, 'steer_sat_cost_enabled', False) else 0.0,
             getattr(self.config, 'steer_sat_soft_ratio', 0.0) * getattr(self.config, 'max_steering_angle', 0.0),
+            getattr(self.config, 'opponent_cost_weight', 0.0) if opponent_enabled else 0.0,
+            getattr(self.config, 'opponent_cost_radius', 0.8),
+            getattr(self.config, 'opponent_cost_power', 2.0),
+            getattr(self.config, 'opponent_cost_discount', 1.0),
         ]
         return (
             jnp.asarray(self.config.control_sample_std, dtype=jnp.float32),
@@ -111,7 +124,8 @@ class MPPI():
     
     @partial(jax.jit, static_argnums=(0))
     def iteration_step(self, a_opt, a_cov, rng_da, env_state, reference_traj,
-                       a_std, temperature, damping, reward_weights, cost_params, norm_params, friction):
+                       a_std, temperature, damping, reward_weights, cost_params, norm_params, friction,
+                       opponent_traj):
         rng_da, rng_da_split1, rng_da_split2 = jax.random.split(rng_da, 3)
         da = jax.random.truncated_normal(
             rng_da,
@@ -126,8 +140,8 @@ class MPPI():
         )
         
         if self.config.state_predictor in self.config.cartesian_models:
-            reward = jax.vmap(self.env.reward_fn_xy, in_axes=(0, None, None, None))(
-                states, reference_traj, reward_weights, cost_params
+            reward = jax.vmap(self.env.reward_fn_xy, in_axes=(0, None, None, None, None))(
+                states, reference_traj, reward_weights, cost_params, opponent_traj
             )
         else:
             reward = jax.vmap(self.env.reward_fn_sey, in_axes=(0, None, None))(
