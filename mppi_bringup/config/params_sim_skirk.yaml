@@ -5,7 +5,7 @@ lmppi_node:
     # JAX compilation, or the random sampling stream.
     is_sim: true                  # true: /ego_racecar/odom; false: /pf/pose/odom.
     state_predictor: dynamic_ST   # Rollout model. dynamic_ST includes yaw rate/slip; kinematic_ST is simpler.
-    n_samples: 8192               # Number of sampled control sequences. More is steadier but slower.
+    n_samples: 2048               # Number of sampled control sequences. More is steadier but slower.
     n_steps: 5                   # Rollout horizon length. At dt=0.1, 12 steps = 1.2s lookahead.
     sim_time_step: 0.1            # Rollout integration/control timestep used inside MPPI.
     random_seed: 527787           # Sampling seed. Keep fixed for repeatable tuning runs.

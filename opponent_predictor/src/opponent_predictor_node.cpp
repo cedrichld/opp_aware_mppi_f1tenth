@@ -117,6 +117,10 @@ public:
       declare_parameter<double>("profile_speed_blend", 0.7), 0.0, 1.0);
     out_of_sight_profile_speed_blend_ = std::clamp(
       declare_parameter<double>("out_of_sight_profile_speed_blend", 1.0), 0.0, 1.0);
+    use_profile_speed_fallback_ = declare_parameter<bool>("use_profile_speed_fallback", false);
+    stationary_speed_threshold_ = std::max(
+      0.0, declare_parameter<double>("stationary_speed_threshold", 0.15));
+    hold_stationary_when_stale_ = declare_parameter<bool>("hold_stationary_when_stale", true);
     lateral_offset_alpha_ = std::clamp(
       declare_parameter<double>("lateral_offset_alpha", 0.35), 0.0, 1.0);
     lateral_offset_decay_time_ = std::max(
@@ -180,6 +184,10 @@ private:
       get_parameter("profile_speed_blend").as_double(), 0.0, 1.0);
     out_of_sight_profile_speed_blend_ = std::clamp(
       get_parameter("out_of_sight_profile_speed_blend").as_double(), 0.0, 1.0);
+    use_profile_speed_fallback_ = get_parameter("use_profile_speed_fallback").as_bool();
+    stationary_speed_threshold_ = std::max(
+      0.0, get_parameter("stationary_speed_threshold").as_double());
+    hold_stationary_when_stale_ = get_parameter("hold_stationary_when_stale").as_bool();
     lateral_offset_alpha_ = std::clamp(
       get_parameter("lateral_offset_alpha").as_double(), 0.0, 1.0);
     lateral_offset_decay_time_ = std::max(
@@ -527,7 +535,11 @@ private:
       }
     }
 
-    if (!progress_speed_valid && (!std::isfinite(v_meas) || std::abs(v_meas) < 0.05)) {
+    if (
+      use_profile_speed_fallback_ &&
+      !progress_speed_valid &&
+      (!std::isfinite(v_meas) || std::abs(v_meas) < 0.05))
+    {
       v_meas = proj.profile_speed;
     }
     v_meas = std::clamp(v_meas, 0.0, max_progress_speed_);
@@ -535,7 +547,7 @@ private:
     if (!initialized_) {
       initialized_ = true;
       s_hat_ = proj.s;
-      v_hat_ = std::max(initial_speed_, v_meas);
+      v_hat_ = std::isfinite(v_meas) ? v_meas : initial_speed_;
       lateral_offset_hat_ = proj.lateral_error;
       last_filter_time_sec_ = now_sec;
     } else {
@@ -563,7 +575,14 @@ private:
 
     double pred_s = s_hat_;
     double pred_v = std::max(0.0, v_hat_);
-    const double blend = stale ? out_of_sight_profile_speed_blend_ : profile_speed_blend_;
+    if (pred_v < stationary_speed_threshold_) {
+      pred_v = 0.0;
+    }
+    double blend = stale ? out_of_sight_profile_speed_blend_ : profile_speed_blend_;
+    const bool stationary = pred_v <= stationary_speed_threshold_;
+    if (stationary && (!stale || hold_stationary_when_stale_)) {
+      blend = 0.0;
+    }
 
     for (int k = 0; k <= prediction_steps_; ++k) {
       TrackPose pose = interpolateTrack(pred_s);
@@ -575,6 +594,9 @@ private:
 
       const double profile_v = interpolateTrack(pred_s).speed;
       pred_v = (1.0 - blend) * pred_v + blend * profile_v;
+      if (stationary && (!stale || hold_stationary_when_stale_)) {
+        pred_v = 0.0;
+      }
       pred_s += pred_v * prediction_dt_;
     }
 
@@ -796,6 +818,9 @@ private:
   double speed_profile_max_speed_ = 20.0;
   double profile_speed_blend_ = 0.7;
   double out_of_sight_profile_speed_blend_ = 1.0;
+  bool use_profile_speed_fallback_ = false;
+  double stationary_speed_threshold_ = 0.15;
+  bool hold_stationary_when_stale_ = true;
   double lateral_offset_alpha_ = 0.35;
   double lateral_offset_decay_time_ = 1.0;
   double position_snap_alpha_ = 1.0;

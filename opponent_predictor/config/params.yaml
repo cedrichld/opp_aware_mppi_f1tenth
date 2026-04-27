@@ -24,14 +24,17 @@ opponent_predictor:
     speed_profile_max_speed: 20.0
     profile_speed_blend: 0.2
     out_of_sight_profile_speed_blend: 0.4
+    use_profile_speed_fallback: false
+    stationary_speed_threshold: 0.15
+    hold_stationary_when_stale: true
 
     lateral_offset_alpha: 0.35
     lateral_offset_decay_time: 0.3
     position_snap_alpha: 1.0
 
-    initial_speed: 1.0
+    initial_speed: 0.0
     stale_timeout: 0.5
-    max_stale_prediction_time: 2.0
+    max_stale_prediction_time: 0.5
     max_progress_speed: 7.5
     max_progress_accel: 4.0
 
