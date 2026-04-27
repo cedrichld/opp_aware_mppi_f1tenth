@@ -16,8 +16,8 @@ lmppi_node:
     temperature: 0.01             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
     # damping: 0.001                # Prevents weight normalization issues when rollout rewards are similar.
     # ref_vel: 5.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
-    init_vel: 4.0                 # Minimum speed assumed by the rollout model at startup/very low speed.
-    startup_speed: 4.0            # Minimum /drive.speed while measured speed is below init_vel.
+    init_vel: 3.0                 # Minimum speed assumed by the rollout model at startup/very low speed.
+    startup_speed: 2.0            # Minimum /drive.speed while measured speed is below init_vel.
     use_pose_delta_state_estimate: false # Sim odom twist is already good; leave the hardware estimator off.
     friction: 0.41                 # Model-only tire/friction belief for dynamic_ST rollouts; tune empirically.
     # n_iterations: 1               # MPPI update passes per odom callback. More can improve solve quality but costs time.
@@ -26,8 +26,8 @@ lmppi_node:
     # These affect what MPPI optimizes against: future XY points and velocity
     # targets become slower in turns and faster on straights.
     use_waypoint_speed_profile: true   # true: use raceline vx_mps; false: use constant ref_vel spacing.
-    speed_profile_scale: 1.0          # Multiplies raceline vx_mps. Raise to push pace; lower for stability.
-    speed_profile_min_speed: 4.2       # Lower clamp for reference/profile speed after scaling.
+    speed_profile_scale: 1.5          # Multiplies raceline vx_mps. Raise to push pace; lower for stability.
+    speed_profile_min_speed: 2.0       # Lower clamp for reference/profile speed after scaling.
     speed_profile_max_speed: 12.0      # Upper clamp for reference/profile speed after scaling.
     speed_profile_lookahead_steps: 3   # Planning brake lookahead: min speed over current..N future ref steps.
     speed_profile_iterations: 3        # Rebuild reference using profiled speeds this many times; 2-3 is enough.
@@ -36,15 +36,15 @@ lmppi_node:
     # supplies steering and can still pull speed through the blend term when
     # blend is below 1.0 (1.0 is much better in sim)
     use_speed_profile_drive_speed: false      # true: blend profile speed into final /drive.speed command.
-    speed_profile_drive_blend: 1.0           # 0 = pure MPPI accel command; 1 = pure raceline/profile speed command.
-    speed_profile_drive_lookahead_steps: 3   # Command brake lookahead: which future ref speed drives /drive.speed.
-    speed_profile_drive_use_min_lookahead: true # true: use min speed through lookahead to avoid early exit accel.
-    speed_profile_drive_max_accel: 10.0       # Max commanded speed increase in m/s^2, using real callback dt.
-    speed_profile_drive_max_decel: 10.0      # Max commanded speed decrease in m/s^2; usually higher than accel.
+    # speed_profile_drive_blend: 1.0           # 0 = pure MPPI accel command; 1 = pure raceline/profile speed command.
+    # speed_profile_drive_lookahead_steps: 3   # Command brake lookahead: which future ref speed drives /drive.speed.
+    # speed_profile_drive_use_min_lookahead: true # true: use min speed through lookahead to avoid early exit accel.
+    # speed_profile_drive_max_accel: 10.0       # Max commanded speed increase in m/s^2, using real callback dt.
+    # speed_profile_drive_max_decel: 10.0      # Max commanded speed decrease in m/s^2; usually higher than accel.
 
     # MPPI control exploration.
-    control_sample_std_steer: 0.5      # Std dev of normalized steering-rate noise. Higher explores sharper turns.
-    control_sample_std_accel: 2.0      # Std dev of normalized accel noise. Higher explores harder accel/brake.
+    control_sample_std_steer: 1.0      # Std dev of normalized steering-rate noise. Higher explores sharper turns.
+    control_sample_std_accel: 4.0      # Std dev of normalized accel noise. Higher explores harder accel/brake.
 
     # Physical scale for normalized controls.
     # normalized steer-rate +1 -> +steer_vel_scale rad/s
@@ -59,7 +59,7 @@ lmppi_node:
     velocity_reward_weight: 0.05        # Penalizes mismatch to reference speed, not raw speed by itself.
     yaw_reward_weight: 0.01             # Penalizes heading mismatch; helps avoid sideways path matches.
 
-    wall_cost_enabled: true
+    wall_cost_enabled: false
     wall_cost_weight: 50.0
     wall_cost_margin: 0.2
     wall_cost_power: 2.0

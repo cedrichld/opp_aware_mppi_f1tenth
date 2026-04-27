@@ -643,6 +643,7 @@ private:
     addHorizonPointMarkers(markers, prediction, stamp, stale);
     addTextMarker(markers, current, stamp, stale, age);
     marker_pub_->publish(markers);
+    prediction_visualization_cleared_ = false;
 
     std_msgs::msg::Float32MultiArray debug;
     debug.data = {
@@ -656,6 +657,26 @@ private:
       stale ? 1.0f : 0.0f
     };
     debug_pub_->publish(debug);
+  }
+
+  void clearPredictionVisualization()
+  {
+    if (prediction_visualization_cleared_) {
+      return;
+    }
+
+    const auto stamp = now();
+
+    nav_msgs::msg::Path path;
+    path.header.stamp = stamp;
+    path.header.frame_id = frame_id_;
+    predicted_path_pub_->publish(path);
+
+    visualization_msgs::msg::MarkerArray markers;
+    addDeleteAllMarker(markers);
+    marker_pub_->publish(markers);
+
+    prediction_visualization_cleared_ = true;
   }
 
   void addDeleteAllMarker(visualization_msgs::msg::MarkerArray & markers) const
@@ -791,11 +812,11 @@ private:
     const double now_sec = now().seconds();
     predictKalmanTo(now_sec);
     const double age = now_sec - last_measurement_time_sec_;
-    if (age > max_stale_prediction_time_) {
+    if (age > stale_timeout_) {
+      clearPredictionVisualization();
       return;
     }
-    const bool stale = age > stale_timeout_;
-    publishPrediction(makePrediction(now_sec, stale), stale, age);
+    publishPrediction(makePrediction(now_sec, false), false, age);
   }
 
   std::string input_odom_topic_;
@@ -836,6 +857,7 @@ private:
   double track_length_ = 0.0;
 
   bool initialized_ = false;
+  bool prediction_visualization_cleared_ = true;
   double s_hat_ = 0.0;
   double v_hat_ = 0.0;
   double p00_ = 0.5;

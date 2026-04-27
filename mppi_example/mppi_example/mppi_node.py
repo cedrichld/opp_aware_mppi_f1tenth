@@ -64,6 +64,11 @@ class MPPI_Node(Node):
         'min_opponent_dist': '/mppi/debug/min_opponent_dist',
         'min_opponent_longitudinal_rel': '/mppi/debug/min_opponent_longitudinal_rel',
         'max_abs_opponent_lateral_rel': '/mppi/debug/max_abs_opponent_lateral_rel',
+        'opponent_auto_mode_id': '/mppi/debug/opponent_auto_mode_id',
+        'opponent_auto_left_clearance': '/mppi/debug/opponent_auto_left_clearance',
+        'opponent_auto_right_clearance': '/mppi/debug/opponent_auto_right_clearance',
+        'opponent_auto_closing_speed': '/mppi/debug/opponent_auto_closing_speed',
+        'opponent_auto_pass_allowed': '/mppi/debug/opponent_auto_pass_allowed',
         'opponent_path_age': '/mppi/debug/opponent_path_age',
         'opponent_active': '/mppi/debug/opponent_active',
         'max_beta': '/mppi/debug/max_beta',
@@ -127,6 +132,13 @@ class MPPI_Node(Node):
         self.state_est_vy = 0.0
         self.state_est_wz = 0.0
         self.state_est_method_enabled = bool(self.config.use_pose_delta_state_estimate)
+        self.opponent_auto_debug = {
+            'mode_id': 0.0,
+            'left_clearance': -1.0,
+            'right_clearance': -1.0,
+            'closing_speed': 0.0,
+            'pass_allowed': 0.0,
+        }
 
         
         qos = rclpy.qos.QoSProfile(history=rclpy.qos.QoSHistoryPolicy.KEEP_LAST,
@@ -260,6 +272,12 @@ class MPPI_Node(Node):
             'opponent_pass_weight': 0.0,
             'opponent_pass_lateral_offset': 0.55,
             'opponent_pass_longitudinal_window': 1.5,
+            'opponent_auto_wall_check_enabled': True,
+            'opponent_auto_min_wall_clearance': 0.45,
+            'opponent_auto_check_steps': 3,
+            'opponent_auto_min_closing_speed': 0.4,
+            'opponent_auto_max_ahead_distance': 4.0,
+            'opponent_auto_side_switch_margin': 0.08,
             'slip_cost_enabled': False,
             'slip_cost_weight': 0.0,
             'slip_cost_beta_safe': 0.2,
@@ -328,6 +346,12 @@ class MPPI_Node(Node):
             'opponent_pass_weight': float(self.config.opponent_pass_weight),
             'opponent_pass_lateral_offset': float(self.config.opponent_pass_lateral_offset),
             'opponent_pass_longitudinal_window': float(self.config.opponent_pass_longitudinal_window),
+            'opponent_auto_wall_check_enabled': bool(self.config.opponent_auto_wall_check_enabled),
+            'opponent_auto_min_wall_clearance': float(self.config.opponent_auto_min_wall_clearance),
+            'opponent_auto_check_steps': int(self.config.opponent_auto_check_steps),
+            'opponent_auto_min_closing_speed': float(self.config.opponent_auto_min_closing_speed),
+            'opponent_auto_max_ahead_distance': float(self.config.opponent_auto_max_ahead_distance),
+            'opponent_auto_side_switch_margin': float(self.config.opponent_auto_side_switch_margin),
             'slip_cost_enabled': bool(self.config.slip_cost_enabled),
             'slip_cost_weight': float(self.config.slip_cost_weight),
             'slip_cost_beta_safe': float(self.config.slip_cost_beta_safe),
@@ -442,6 +466,7 @@ class MPPI_Node(Node):
         mode_name = str(self.get_parameter('opponent_behavior_mode').value).strip().lower()
         mode_map = {
             'follow': 0.0,
+            'auto': 0.0,
             'clear': 1.0,
             'pass_left': 2.0,
             'left': 2.0,
@@ -478,6 +503,29 @@ class MPPI_Node(Node):
         self.config.opponent_pass_longitudinal_window = max(
             0.01,
             float(self.get_parameter('opponent_pass_longitudinal_window').value),
+        )
+        self.config.opponent_auto_wall_check_enabled = bool(
+            self.get_parameter('opponent_auto_wall_check_enabled').value
+        )
+        self.config.opponent_auto_min_wall_clearance = max(
+            0.0,
+            float(self.get_parameter('opponent_auto_min_wall_clearance').value),
+        )
+        self.config.opponent_auto_check_steps = max(
+            1,
+            int(self.get_parameter('opponent_auto_check_steps').value),
+        )
+        self.config.opponent_auto_min_closing_speed = max(
+            0.0,
+            float(self.get_parameter('opponent_auto_min_closing_speed').value),
+        )
+        self.config.opponent_auto_max_ahead_distance = max(
+            0.0,
+            float(self.get_parameter('opponent_auto_max_ahead_distance').value),
+        )
+        self.config.opponent_auto_side_switch_margin = max(
+            0.0,
+            float(self.get_parameter('opponent_auto_side_switch_margin').value),
         )
         self.config.slip_cost_enabled = bool(self.get_parameter('slip_cost_enabled').value)
         self.config.slip_cost_weight = max(
@@ -663,6 +711,112 @@ class MPPI_Node(Node):
             and np.isfinite(horizon).all()
         )
         return horizon, active, age
+
+    def opponent_horizon_speed(self, opponent_traj):
+        opponent_traj = np.asarray(opponent_traj, dtype=float)
+        if opponent_traj.ndim != 2 or opponent_traj.shape[0] < 2:
+            return 0.0
+        dt = max(1e-3, float(self.config.sim_time_step))
+        step = opponent_traj[1] - opponent_traj[0]
+        speed = float(np.linalg.norm(step) / dt)
+        if not np.isfinite(speed):
+            return 0.0
+        return speed
+
+    def opponent_pass_clearance(self, opponent_traj, reference_traj, side):
+        if (
+            self.config.opponent_auto_wall_check_enabled
+            and getattr(self.infer_env, 'wall_sdf', None) is None
+        ):
+            return 0.0
+
+        n = min(
+            max(1, int(self.config.opponent_auto_check_steps)),
+            opponent_traj.shape[0],
+            max(1, reference_traj.shape[0] - 1),
+        )
+        pass_offset = max(
+            float(self.config.opponent_pass_lateral_offset),
+            float(self.config.opponent_cost_radius),
+        )
+        candidates = []
+        for k in range(n):
+            ref_idx = min(k + 1, reference_traj.shape[0] - 1)
+            yaw = float(reference_traj[ref_idx, 3])
+            normal = np.asarray([-np.sin(yaw), np.cos(yaw)], dtype=float)
+            candidates.append(opponent_traj[k, :2] + side * pass_offset * normal)
+        candidates = np.asarray(candidates, dtype=np.float32)
+
+        wall_dist = np.asarray(
+            self.infer_env.sample_wall_distance(jnp.asarray(candidates)),
+            dtype=float,
+        )
+        if wall_dist.size == 0 or not np.isfinite(wall_dist).any():
+            return 0.0
+        return float(np.nanmin(wall_dist))
+
+    def apply_auto_opponent_behavior(self, state_c_0, reference_traj, opponent_traj, opponent_active):
+        self.opponent_auto_debug = {
+            'mode_id': float(self.config.opponent_behavior_mode_id),
+            'left_clearance': -1.0,
+            'right_clearance': -1.0,
+            'closing_speed': 0.0,
+            'pass_allowed': 0.0,
+        }
+        if self.config.opponent_behavior_mode != 'auto':
+            return
+        if not opponent_active:
+            self.config.opponent_behavior_mode_id = 1.0
+            self.opponent_auto_debug['mode_id'] = 1.0
+            return
+
+        ego_xy = np.asarray(state_c_0[:2], dtype=float)
+        ego_speed = float(state_c_0[3])
+        opp_xy = np.asarray(opponent_traj[0, :2], dtype=float)
+        ref_yaw = float(reference_traj[0, 3])
+        tangent = np.asarray([np.cos(ref_yaw), np.sin(ref_yaw)], dtype=float)
+
+        rel_ego_to_opp = opp_xy - ego_xy
+        ahead_distance = float(np.dot(rel_ego_to_opp, tangent))
+        opponent_speed = self.opponent_horizon_speed(opponent_traj)
+        desired_speed = max(ego_speed, float(reference_traj[0, 2]))
+        closing_speed = desired_speed - opponent_speed
+
+        self.opponent_auto_debug['closing_speed'] = float(closing_speed)
+
+        opponent_relevant = (
+            ahead_distance > -0.25
+            and ahead_distance <= self.config.opponent_auto_max_ahead_distance
+        )
+        if not opponent_relevant:
+            self.config.opponent_behavior_mode_id = 1.0
+            self.opponent_auto_debug['mode_id'] = 1.0
+            return
+
+        left_clearance = self.opponent_pass_clearance(opponent_traj, reference_traj, side=1.0)
+        right_clearance = self.opponent_pass_clearance(opponent_traj, reference_traj, side=-1.0)
+        self.opponent_auto_debug['left_clearance'] = left_clearance
+        self.opponent_auto_debug['right_clearance'] = right_clearance
+
+        min_clearance = float(self.config.opponent_auto_min_wall_clearance)
+        closing_enough = closing_speed >= self.config.opponent_auto_min_closing_speed
+        left_allowed = left_clearance >= min_clearance
+        right_allowed = right_clearance >= min_clearance
+
+        if not closing_enough or (not left_allowed and not right_allowed):
+            self.config.opponent_behavior_mode_id = 0.0
+            self.opponent_auto_debug['mode_id'] = 0.0
+            return
+
+        self.opponent_auto_debug['pass_allowed'] = 1.0
+        margin = float(self.config.opponent_auto_side_switch_margin)
+        if left_allowed and (not right_allowed or left_clearance >= right_clearance + margin):
+            self.config.opponent_behavior_mode_id = 2.0
+        elif right_allowed:
+            self.config.opponent_behavior_mode_id = 3.0
+        else:
+            self.config.opponent_behavior_mode_id = 2.0
+        self.opponent_auto_debug['mode_id'] = float(self.config.opponent_behavior_mode_id)
 
     def reset_state_estimator(self):
         self.prev_pose_time = None
@@ -911,6 +1065,11 @@ class MPPI_Node(Node):
         debug_terms['opponent_active'] = 1.0 if opponent_active else 0.0
         if not opponent_active:
             debug_terms['min_opponent_dist'] = -1.0
+        debug_terms['opponent_auto_mode_id'] = self.opponent_auto_debug.get('mode_id', 0.0)
+        debug_terms['opponent_auto_left_clearance'] = self.opponent_auto_debug.get('left_clearance', -1.0)
+        debug_terms['opponent_auto_right_clearance'] = self.opponent_auto_debug.get('right_clearance', -1.0)
+        debug_terms['opponent_auto_closing_speed'] = self.opponent_auto_debug.get('closing_speed', 0.0)
+        debug_terms['opponent_auto_pass_allowed'] = self.opponent_auto_debug.get('pass_allowed', 0.0)
 
         for key, pub in self.reward_debug_pubs.items():
             if pub.get_subscription_count() == 0:
@@ -956,6 +1115,7 @@ class MPPI_Node(Node):
         
         reference_traj, waypoint_ind = self.infer_env.get_refernece_traj(state_c_0, find_waypoint_vel, self.config.n_steps)
         opponent_traj, opponent_active, opponent_age = self.get_opponent_horizon()
+        self.apply_auto_opponent_behavior(state_c_0, reference_traj, opponent_traj, opponent_active)
 
         ## MPPI call
         self.mppi.update(

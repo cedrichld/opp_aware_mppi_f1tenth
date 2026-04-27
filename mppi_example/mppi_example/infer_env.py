@@ -340,8 +340,12 @@ class InferEnv():
         return reference.T, ind
     
     def _init_wall_cost(self):
+        needs_wall_sdf = (
+            bool(getattr(self.config, 'wall_cost_enabled', False))
+            or bool(getattr(self.config, 'opponent_auto_wall_check_enabled', False))
+        )
         signature = (
-            bool(getattr(self.config, 'wall_cost_enabled', False)),
+            needs_wall_sdf,
             str(getattr(self.config, 'wall_cost_map_yaml', '')),
         )
         if getattr(self, 'wall_cost_signature', None) == signature:
@@ -352,7 +356,7 @@ class InferEnv():
         self.wall_resolution = None
         self.wall_cost_signature = signature
 
-        if not getattr(self.config, 'wall_cost_enabled', False):
+        if not needs_wall_sdf:
             return
         map_yaml = getattr(self.config, 'wall_cost_map_yaml', '')
         if not map_yaml:
