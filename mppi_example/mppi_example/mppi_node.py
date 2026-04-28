@@ -14,6 +14,7 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import Float32, Float32MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
 from raceline_msgs.srv import UpdateRaceline
+from rcl_interfaces.msg import ParameterDescriptor, FloatingPointRange, IntegerRange
 
 try:
     from ament_index_python.packages import get_package_share_directory
@@ -294,99 +295,260 @@ class MPPI_Node(Node):
                 setattr(self.config, key, value)
 
     def declare_ros_params(self):
+        def fdesc(desc, lo, hi, step=0.0, read_only=False):
+            # NOTE on step: rqt uses step to decide how many decimals to show
+            # (step=0.001 -> 3 decimals, step=0.01 -> 2, step=1.0 -> 0). ROS2
+            # validates that (value - lo) is an integer multiple of step
+            # (math.isclose, rel_tol=1e-9), so pick lo + step so YAML defaults
+            # land on the grid. Use step=0.0 only when alignment isn't possible.
+            return ParameterDescriptor(
+                description=desc,
+                floating_point_range=[FloatingPointRange(
+                    from_value=float(lo), to_value=float(hi), step=float(step))],
+                read_only=read_only,
+            )
+
+        def idesc(desc, lo, hi, step=1, read_only=False):
+            return ParameterDescriptor(
+                description=desc,
+                integer_range=[IntegerRange(
+                    from_value=int(lo), to_value=int(hi), step=int(step))],
+                read_only=read_only,
+            )
+
+        def desc(text, read_only=False):
+            return ParameterDescriptor(description=text, read_only=read_only)
+
+        def declf(name, value, d):
+            self.declare_parameter(name, float(value), d)
+
+        def decli(name, value, d):
+            self.declare_parameter(name, int(value), d)
+
+        def declb(name, value, d):
+            self.declare_parameter(name, bool(value), d)
+
+        def decls(name, value, d):
+            self.declare_parameter(name, str(value), d)
+
         steer_vel_scale = float(self.config.norm_params[0, 0] / 2.0)
         accel_scale = float(self.config.norm_params[0, 1] / 2.0)
         random_seed = -1 if self.config.random_seed is None else int(self.config.random_seed)
 
-        startup_params = {
-            'is_sim': bool(self.config.is_sim),
-            'wpt_path_absolute': bool(self.config.wpt_path_absolute),
-            'wpt_path': str(self.config.wpt_path),
-            'wall_cost_map_yaml': str(self.config.wall_cost_map_yaml),
-            'opponent_path_topic': str(self.config.opponent_path_topic),
-            'map_dir': str(self.config.map_dir),
-            'map_ind': int(self.config.map_ind),
-            'state_predictor': str(self.config.state_predictor),
-            'n_samples': int(self.config.n_samples),
-            'n_steps': int(self.config.n_steps),
-            'sim_time_step': float(self.config.sim_time_step),
-            'random_seed': random_seed,
-            'render': bool(self.config.render),
-        }
-        live_params = {
-            'temperature': float(self.config.temperature),
-            'damping': float(self.config.damping),
-            'ref_vel': float(self.config.ref_vel),
-            'init_vel': float(self.config.init_vel),
-            'startup_speed': float(self.config.startup_speed),
-            'use_pose_delta_state_estimate': bool(self.config.use_pose_delta_state_estimate),
-            'friction': float(self.config.friction),
-            'n_iterations': int(self.config.n_iterations),
-            'control_sample_std_steer': float(self.config.control_sample_std[0]),
-            'control_sample_std_accel': float(self.config.control_sample_std[1]),
-            'steer_vel_scale': steer_vel_scale,
-            'accel_scale': accel_scale,
-            'xy_reward_weight': float(self.config.xy_reward_weight),
-            'velocity_reward_weight': float(self.config.velocity_reward_weight),
-            'yaw_reward_weight': float(self.config.yaw_reward_weight),
-            'wall_cost_enabled': bool(self.config.wall_cost_enabled),
-            'wall_cost_weight': float(self.config.wall_cost_weight),
-            'wall_cost_margin': float(self.config.wall_cost_margin),
-            'wall_cost_power': float(self.config.wall_cost_power),
-            'opponent_cost_enabled': bool(self.config.opponent_cost_enabled),
-            'opponent_cost_weight': float(self.config.opponent_cost_weight),
-            'opponent_cost_radius': float(self.config.opponent_cost_radius),
-            'opponent_cost_power': float(self.config.opponent_cost_power),
-            'opponent_cost_discount': float(self.config.opponent_cost_discount),
-            'opponent_path_timeout': float(self.config.opponent_path_timeout),
-            'opponent_behavior_mode': str(self.config.opponent_behavior_mode),
-            'opponent_follow_weight': float(self.config.opponent_follow_weight),
-            'opponent_follow_distance': float(self.config.opponent_follow_distance),
-            'opponent_same_lane_width': float(self.config.opponent_same_lane_width),
-            'opponent_pass_weight': float(self.config.opponent_pass_weight),
-            'opponent_pass_lateral_offset': float(self.config.opponent_pass_lateral_offset),
-            'opponent_pass_longitudinal_window': float(self.config.opponent_pass_longitudinal_window),
-            'opponent_auto_wall_check_enabled': bool(self.config.opponent_auto_wall_check_enabled),
-            'opponent_auto_min_wall_clearance': float(self.config.opponent_auto_min_wall_clearance),
-            'opponent_auto_check_steps': int(self.config.opponent_auto_check_steps),
-            'opponent_auto_min_closing_speed': float(self.config.opponent_auto_min_closing_speed),
-            'opponent_auto_max_ahead_distance': float(self.config.opponent_auto_max_ahead_distance),
-            'opponent_auto_side_switch_margin': float(self.config.opponent_auto_side_switch_margin),
-            'slip_cost_enabled': bool(self.config.slip_cost_enabled),
-            'slip_cost_weight': float(self.config.slip_cost_weight),
-            'slip_cost_beta_safe': float(self.config.slip_cost_beta_safe),
-            'latacc_cost_enabled': bool(self.config.latacc_cost_enabled),
-            'latacc_cost_weight': float(self.config.latacc_cost_weight),
-            'latacc_cost_safe': float(self.config.latacc_cost_safe),
-            'steer_sat_cost_enabled': bool(self.config.steer_sat_cost_enabled),
-            'steer_sat_cost_weight': float(self.config.steer_sat_cost_weight),
-            'steer_sat_soft_ratio': float(self.config.steer_sat_soft_ratio),
-            'use_waypoint_speed_profile': bool(self.config.use_waypoint_speed_profile),
-            'speed_profile_scale': float(self.config.speed_profile_scale),
-            'speed_profile_min_speed': float(self.config.speed_profile_min_speed),
-            'speed_profile_max_speed': float(self.config.speed_profile_max_speed),
-            'speed_profile_lookahead_steps': int(self.config.speed_profile_lookahead_steps),
-            'speed_profile_iterations': int(self.config.speed_profile_iterations),
-            'use_speed_profile_drive_speed': bool(self.config.use_speed_profile_drive_speed),
-            'speed_profile_drive_blend': float(self.config.speed_profile_drive_blend),
-            'speed_profile_drive_lookahead_steps': int(self.config.speed_profile_drive_lookahead_steps),
-            'speed_profile_drive_use_min_lookahead': bool(self.config.speed_profile_drive_use_min_lookahead),
-            'speed_profile_drive_max_accel': float(self.config.speed_profile_drive_max_accel),
-            'speed_profile_drive_max_decel': float(self.config.speed_profile_drive_max_decel),
-            'min_speed': float(self.config.min_speed),
-            'max_speed': float(self.config.max_speed),
-            'max_steering_angle': float(self.config.max_steering_angle),
-            'publish_markers': bool(self.config.publish_markers),
-            'marker_frame_id': str(self.config.marker_frame_id),
-            'reference_line_width': float(self.config.reference_line_width),
-            'optimal_line_width': float(self.config.optimal_line_width),
-            'sampled_line_width': float(self.config.sampled_line_width),
-            'sampled_trajectory_count': int(self.config.sampled_trajectory_count),
-            'sampled_trajectory_alpha': float(self.config.sampled_trajectory_alpha),
-        }
+        # ---- Startup-only (read at init; require restart to change) ----
+        declb('is_sim', self.config.is_sim,
+              desc('[startup] true: /ego_racecar/odom; false: /pf/pose/odom.', read_only=True))
+        declb('wpt_path_absolute', self.config.wpt_path_absolute,
+              desc('[startup] Use wpt_path as absolute path to raceline CSV.', read_only=True))
+        decls('wpt_path', self.config.wpt_path,
+              desc('[startup] Absolute path to MPPI raceline CSV.', read_only=True))
+        decls('wall_cost_map_yaml', self.config.wall_cost_map_yaml,
+              desc('[startup] Map YAML for wall SDF (injected by launch).', read_only=True))
+        decls('opponent_path_topic', self.config.opponent_path_topic,
+              desc('[startup] Topic publishing opponent predicted Path.', read_only=True))
+        decls('map_dir', self.config.map_dir,
+              desc('[startup] Directory containing map_info.txt and raceline csv.', read_only=True))
+        decli('map_ind', self.config.map_ind,
+              idesc('[startup] Row index in map_info.txt to use.', 0, 64, read_only=True))
+        decls('state_predictor', self.config.state_predictor,
+              desc('[startup] Rollout model: dynamic_ST or kinematic_ST.', read_only=True))
+        decli('n_samples', self.config.n_samples,
+              idesc('[startup] Number of sampled control sequences (JAX recompile).',
+                    16, 8192, read_only=True))
+        decli('n_steps', self.config.n_steps,
+              idesc('[startup] Rollout horizon length (JAX recompile).',
+                    2, 64, read_only=True))
+        declf('sim_time_step', self.config.sim_time_step,
+              fdesc('[startup] Rollout integration timestep (s).',
+                    0.01, 0.5, 0.005, read_only=True))
+        decli('random_seed', random_seed,
+              idesc('[startup] Sampling seed (-1 = random each run).',
+                    -1, 1_000_000, read_only=True))
+        declb('render', self.config.render,
+              desc('[startup] Keep optimal/sampled rollouts available for visualization.',
+                   read_only=True))
 
-        for name, value in {**startup_params, **live_params}.items():
-            self.declare_parameter(name, value)
+        # ---- MPPI core ----
+        declf('temperature', self.config.temperature,
+              fdesc('MPPI greediness. Lower=winner-take-all; higher=smoother averaging.',
+                    0.001, 1.0, 0.001))
+        declf('damping', self.config.damping,
+              fdesc('Weight normalization stabilizer when rewards are similar.',
+                    0.0, 0.1, 1e-4))
+        declf('ref_vel', self.config.ref_vel,
+              fdesc('Legacy constant-speed reference seed (mostly bypassed when profile on).',
+                    0.0, 20.0, 0.1))
+        declf('init_vel', self.config.init_vel,
+              fdesc('Min speed assumed by rollout model at startup/very low speed.',
+                    0.0, 5.0, 0.1))
+        declf('startup_speed', self.config.startup_speed,
+              fdesc('Min /drive.speed while measured speed < init_vel.',
+                    0.0, 5.0, 0.1))
+        declb('use_pose_delta_state_estimate', self.config.use_pose_delta_state_estimate,
+              desc('Hardware speed estimator from pose deltas (off in sim).'))
+        declf('friction', self.config.friction,
+              fdesc('Tire/friction belief for dynamic_ST rollouts.',
+                    0.05, 1.5, 0.01))
+        decli('n_iterations', self.config.n_iterations,
+              idesc('MPPI update passes per odom callback.', 1, 10))
+
+        # ---- Sampling / control scaling ----
+        declf('control_sample_std_steer', self.config.control_sample_std[0],
+              fdesc('Std of normalized steering-rate noise. Higher = sharper exploration.',
+                    0.0, 2.0, 0.01))
+        declf('control_sample_std_accel', self.config.control_sample_std[1],
+              fdesc('Std of normalized accel noise. Higher = harder accel/brake exploration.',
+                    0.0, 5.0, 0.05))
+        declf('steer_vel_scale', steer_vel_scale,
+              fdesc('Converts normalized steering action to rad/s.',
+                    0.1, 10.0, 0.05))
+        declf('accel_scale', accel_scale,
+              fdesc('Converts normalized accel action to m/s^2.',
+                    0.1, 20.0, 0.1))
+
+        # ---- Reward weights ----
+        declf('xy_reward_weight', self.config.xy_reward_weight,
+              fdesc('Path-tracking term: distance from rollout to reference XY.',
+                    0.0, 5.0, 0.01))
+        declf('velocity_reward_weight', self.config.velocity_reward_weight,
+              fdesc('Penalizes mismatch to reference speed.', 0.0, 5.0, 0.01))
+        declf('yaw_reward_weight', self.config.yaw_reward_weight,
+              fdesc('Penalizes heading mismatch.', 0.0, 5.0, 0.01))
+
+        # ---- Wall cost ----
+        declb('wall_cost_enabled', self.config.wall_cost_enabled,
+              desc('Enable wall SDF cost.'))
+        declf('wall_cost_weight', self.config.wall_cost_weight,
+              fdesc('Wall cost weight.', 0.0, 1000.0, 1.0))
+        declf('wall_cost_margin', self.config.wall_cost_margin,
+              fdesc('Distance below which wall cost activates (m).', 0.0, 1.5, 0.01))
+        declf('wall_cost_power', self.config.wall_cost_power,
+              fdesc('Wall cost exponent.', 1.0, 5.0, 0.1))
+
+        # ---- Opponent cost ----
+        declb('opponent_cost_enabled', self.config.opponent_cost_enabled,
+              desc('Enable opponent-aware MPPI cost.'))
+        declf('opponent_cost_weight', self.config.opponent_cost_weight,
+              fdesc('Opponent proximity cost weight.', 0.0, 1000.0, 1.0))
+        declf('opponent_cost_radius', self.config.opponent_cost_radius,
+              fdesc('Soft keep-out radius around opponent (m).', 0.0, 3.0, 0.01))
+        declf('opponent_cost_power', self.config.opponent_cost_power,
+              fdesc('Opponent cost exponent.', 1.0, 5.0, 0.1))
+        declf('opponent_cost_discount', self.config.opponent_cost_discount,
+              fdesc('Per-step discount along opponent horizon.', 0.0, 1.0, 0.01))
+        declf('opponent_path_timeout', self.config.opponent_path_timeout,
+              fdesc('Stale opponent path timeout (s).', 0.0, 5.0, 0.05))
+        decls('opponent_behavior_mode', self.config.opponent_behavior_mode,
+              desc('One of: follow | clear | pass_left | pass_right | auto.'))
+        declf('opponent_follow_weight', self.config.opponent_follow_weight,
+              fdesc('Follow mode: penalty for closing too near behind opponent.',
+                    0.0, 1000.0, 0.5))
+        declf('opponent_follow_distance', self.config.opponent_follow_distance,
+              fdesc('Desired gap behind opponent (m).', 0.0, 5.0, 0.05))
+        declf('opponent_same_lane_width', self.config.opponent_same_lane_width,
+              fdesc('Follow gap only applies when ego roughly same lane (m).',
+                    0.05, 3.0, 0.05))
+        declf('opponent_pass_weight', self.config.opponent_pass_weight,
+              fdesc('Pass mode: pushes rollout to requested side.', 0.0, 1000.0, 0.5))
+        declf('opponent_pass_lateral_offset', self.config.opponent_pass_lateral_offset,
+              fdesc('Desired lateral offset from opponent during pass (m).',
+                    0.0, 2.0, 0.05))
+        declf('opponent_pass_longitudinal_window', self.config.opponent_pass_longitudinal_window,
+              fdesc('Longitudinal window where pass-side cost applies (m).',
+                    0.05, 5.0, 0.05))
+
+        # ---- Auto-mode opponent decisions ----
+        declb('opponent_auto_wall_check_enabled', self.config.opponent_auto_wall_check_enabled,
+              desc('Auto mode: check wall clearance before passing.'))
+        declf('opponent_auto_min_wall_clearance', self.config.opponent_auto_min_wall_clearance,
+              fdesc('Min wall clearance to allow pass (m).', 0.0, 2.0, 0.01))
+        decli('opponent_auto_check_steps', self.config.opponent_auto_check_steps,
+              idesc('How many opponent horizon points to check for clearance.', 1, 20))
+        declf('opponent_auto_min_closing_speed', self.config.opponent_auto_min_closing_speed,
+              fdesc('Min ego-opponent closing speed to start a pass (m/s).',
+                    0.0, 10.0, 0.1))
+        declf('opponent_auto_max_ahead_distance', self.config.opponent_auto_max_ahead_distance,
+              fdesc('Only consider passing opponents within this distance ahead (m).',
+                    0.0, 20.0, 0.1))
+        declf('opponent_auto_side_switch_margin', self.config.opponent_auto_side_switch_margin,
+              fdesc('Hysteresis: extra clearance needed to flip preferred pass side (m).',
+                    0.0, 1.0, 0.01))
+
+        # ---- Slip / lat-acc / steer saturation costs ----
+        declb('slip_cost_enabled', self.config.slip_cost_enabled,
+              desc('Enable side-slip cost.'))
+        declf('slip_cost_weight', self.config.slip_cost_weight,
+              fdesc('Slip cost weight.', 0.0, 50.0, 0.1))
+        declf('slip_cost_beta_safe', self.config.slip_cost_beta_safe,
+              fdesc('Safe slip-angle threshold (rad).', 0.0, 1.5, 0.01))
+
+        declb('latacc_cost_enabled', self.config.latacc_cost_enabled,
+              desc('Enable lateral acceleration cost.'))
+        declf('latacc_cost_weight', self.config.latacc_cost_weight,
+              fdesc('Lat-acc cost weight.', 0.0, 50.0, 0.1))
+        declf('latacc_cost_safe', self.config.latacc_cost_safe,
+              fdesc('Lat-acc safe threshold (m/s^2).', 0.0, 100.0, 0.5))
+
+        declb('steer_sat_cost_enabled', self.config.steer_sat_cost_enabled,
+              desc('Enable steering-saturation cost.'))
+        declf('steer_sat_cost_weight', self.config.steer_sat_cost_weight,
+              fdesc('Steering saturation cost weight.', 0.0, 10.0, 0.05))
+        declf('steer_sat_soft_ratio', self.config.steer_sat_soft_ratio,
+              fdesc('Soft limit as fraction of max steering.', 0.0, 1.0, 0.01))
+
+        # ---- Speed profile (rollout reference) ----
+        declb('use_waypoint_speed_profile', self.config.use_waypoint_speed_profile,
+              desc('Use raceline vx_mps as MPPI reference speed.'))
+        declf('speed_profile_scale', self.config.speed_profile_scale,
+              fdesc('Multiplies raceline vx_mps. Raise to push pace.',
+                    0.0, 3.0, 0.01))
+        declf('speed_profile_min_speed', self.config.speed_profile_min_speed,
+              fdesc('Lower clamp for profile speed (m/s).', 0.0, 20.0, 0.1))
+        declf('speed_profile_max_speed', self.config.speed_profile_max_speed,
+              fdesc('Upper clamp for profile speed (m/s).', 0.0, 25.0, 0.1))
+        decli('speed_profile_lookahead_steps', self.config.speed_profile_lookahead_steps,
+              idesc('Planning brake lookahead (steps).', 0, 20))
+        decli('speed_profile_iterations', self.config.speed_profile_iterations,
+              idesc('Profile rebuild passes per call.', 1, 10))
+
+        # ---- Speed profile (drive feedforward) ----
+        declb('use_speed_profile_drive_speed', self.config.use_speed_profile_drive_speed,
+              desc('Blend profile speed into final /drive.speed command.'))
+        declf('speed_profile_drive_blend', self.config.speed_profile_drive_blend,
+              fdesc('0 = pure MPPI accel; 1 = pure profile speed.', 0.0, 1.0, 0.01))
+        decli('speed_profile_drive_lookahead_steps', self.config.speed_profile_drive_lookahead_steps,
+              idesc('Command brake lookahead (future ref step).', 0, 20))
+        declb('speed_profile_drive_use_min_lookahead',
+              self.config.speed_profile_drive_use_min_lookahead,
+              desc('Use min speed through lookahead window.'))
+        declf('speed_profile_drive_max_accel', self.config.speed_profile_drive_max_accel,
+              fdesc('Max commanded speed increase rate (m/s^2).', 0.0, 30.0, 0.1))
+        declf('speed_profile_drive_max_decel', self.config.speed_profile_drive_max_decel,
+              fdesc('Max commanded speed decrease rate (m/s^2).', 0.0, 30.0, 0.1))
+
+        # ---- Output safety clamps ----
+        declf('min_speed', self.config.min_speed,
+              fdesc('Final /drive.speed lower clamp (m/s).', 0.0, 20.0, 0.1))
+        declf('max_speed', self.config.max_speed,
+              fdesc('Final /drive.speed upper clamp (m/s).', 0.0, 25.0, 0.1))
+        declf('max_steering_angle', self.config.max_steering_angle,
+              fdesc('Final steering-angle clamp (rad).', 0.0, 1.0, 0.0001))
+
+        # ---- Visualization ----
+        declb('publish_markers', self.config.publish_markers,
+              desc('Toggle MPPI MarkerArray publishers.'))
+        decls('marker_frame_id', self.config.marker_frame_id,
+              desc('RViz frame for trajectory markers.'))
+        declf('reference_line_width', self.config.reference_line_width,
+              fdesc('Reference (blue) line width (m).', 0.0, 0.5, 0.005))
+        declf('optimal_line_width', self.config.optimal_line_width,
+              fdesc('Optimal rollout (green) line width (m).', 0.0, 0.5, 0.005))
+        declf('sampled_line_width', self.config.sampled_line_width,
+              fdesc('Sampled rollout (orange) line width (m).', 0.0, 0.5, 0.005))
+        decli('sampled_trajectory_count', self.config.sampled_trajectory_count,
+              idesc('Number of sampled rollouts to draw.', 0, 256))
+        declf('sampled_trajectory_alpha', self.config.sampled_trajectory_alpha,
+              fdesc('Sampled rollout transparency.', 0.0, 1.0, 0.01))
 
     def get_params(self, startup=False):
         if startup:

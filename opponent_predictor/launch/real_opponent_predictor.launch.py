@@ -31,6 +31,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('opponent_predictor'),
                 'config',
+                'hardware',
                 'params.yaml',
             ]),
             description='YAML file with opponent predictor parameters.',
@@ -40,6 +41,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('opponent_predictor'),
                 'config',
+                'hardware',
                 'lidar_detector.yaml',
             ]),
             description='YAML file with LiDAR opponent detector parameters.',

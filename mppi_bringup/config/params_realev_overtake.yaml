@@ -68,9 +68,9 @@ lmppi_node:
     # Opponent-aware MPPI cost. Keep disabled until /opponent/predicted_path
     # is healthy, then tune weight/radius live with ros2 param set.
     opponent_path_topic: /opponent/predicted_path
-    opponent_cost_enabled: false
-    opponent_cost_weight: 1000.0
-    opponent_cost_radius: 0.4
+    opponent_cost_enabled: true
+    opponent_cost_weight: 120.0
+    opponent_cost_radius: 0.75
     opponent_cost_power: 2.0
     opponent_cost_discount: 1.0
     opponent_path_timeout: 0.5
@@ -81,10 +81,11 @@ lmppi_node:
     opponent_pass_weight: 12.0           # In pass modes, pushes rollout to requested side near opponent.
     opponent_pass_lateral_offset: 0.55   # Desired lateral offset from opponent during a pass.
     opponent_auto_wall_check_enabled: true
-    opponent_auto_min_wall_clearance: 0.45 # Required wall clearance at candidate pass-side points.
+    opponent_auto_min_wall_clearance: 0.6 # Required wall clearance at candidate pass-side points.
     opponent_auto_check_steps: 3          # How many opponent horizon points to check for pass clearance.
-    opponent_auto_min_closing_speed: 0.4  # Required desired ego speed minus opponent speed before passing.
-    opponent_auto_max_ahead_distance: 4.0 # Only consider passing opponents this far ahead along reference tangent.
+    opponent_auto_min_closing_speed: 0.6  # Required desired ego speed minus opponent speed before passing.
+    opponent_auto_max_ahead_distance: 3.0 # Only consider passing opponents this far ahead along reference tangent.
+    opponent_auto_side_switch_margin: 0.12 # Extra clearance needed before switching preferred pass side.
     opponent_pass_longitudinal_window: 1.5 # Longitudinal window around opponent where pass-side cost applies.
 
     slip_cost_enabled: false
