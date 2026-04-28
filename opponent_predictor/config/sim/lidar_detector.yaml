@@ -13,7 +13,10 @@ opponent_lidar_detector:
 
     frame_id: map
     base_frame_id: ego_racecar/base_link
-    laser_x_offset: 0.0
+    # Sim URDF mounts ego_racecar/laser_model 0.45 m ahead of base_link.
+    # LaserScan ranges are measured from the laser origin, so without this
+    # offset dynamic points appear shifted toward the ego car.
+    laser_x_offset: 0.275
     laser_y_offset: 0.0
     laser_yaw_offset: 0.0
 
