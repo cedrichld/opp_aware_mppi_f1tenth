@@ -6,17 +6,17 @@ lmppi_node:
     is_sim: false                  # true: /ego_racecar/odom; false: /pf/pose/odom.
     state_predictor: dynamic_ST   # Rollout model. dynamic_ST includes yaw rate/slip; kinematic_ST is simpler.
     n_samples: 1024               # Number of sampled control sequences. More is steadier but slower.
-    n_steps: 10 #try lower                   # Rollout horizon length. At dt=0.1, 12 steps = 1.2s lookahead.
+    n_steps: 6 #try lower                   # Rollout horizon length. At dt=0.1, 12 steps = 1.2s lookahead.
     sim_time_step: 0.1            # Rollout integration/control timestep used inside MPPI.
     random_seed: 527787           # Sampling seed. Keep fixed for repeatable tuning runs.
     render: true                  # true keeps optimal/sampled rollouts available for visualization.
 
     # Live tuning parameters: mppi_node.get_params() refreshes these on every
     # odometry callback, so they can be changed with ros2 param set.
-    temperature: 0.07             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
+    temperature: 0.1             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
     # damping: 0.001                # Prevents weight normalization issues when rollout rewards are similar.
     # ref_vel: 2.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
-    init_vel: 2.0                 # Minimum speed assumed by the rollout model at startup/very low speed.
+    init_vel: 1.0                 # Minimum speed assumed by the rollout model at startup/very low speed.
     startup_speed: 1.0            # Minimum /drive.speed while measured speed is below init_vel.
     use_pose_delta_state_estimate: true # Real car: estimate vx / yaw-rate from PF pose deltas plus command prior.
     friction: 0.4                # Model-only tire/friction belief for dynamic_ST rollouts; tune empirically.
@@ -26,8 +26,8 @@ lmppi_node:
     # These affect what MPPI optimizes against: future XY points and velocity
     # targets become slower in turns and faster on straights.
     use_waypoint_speed_profile: true   # true: use raceline vx_mps; false: use constant ref_vel spacing.
-    speed_profile_scale: 1.0          # Multiplies raceline vx_mps. Raise to push pace; lower for stability.
-    speed_profile_min_speed: 2.0       # Lower clamp for reference/profile speed after scaling.
+    speed_profile_scale: 0.8          # Multiplies raceline vx_mps. Raise to push pace; lower for stability.
+    speed_profile_min_speed: 1.0       # Lower clamp for reference/profile speed after scaling.
     speed_profile_max_speed: 9.0      # Upper clamp for reference/profile speed after scaling.
     speed_profile_lookahead_steps: 3   # Planning brake lookahead: min speed over current..N future ref steps.
     speed_profile_iterations: 3        # Rebuild reference using profiled speeds this many times; 2-3 is enough.
@@ -37,7 +37,7 @@ lmppi_node:
     # blend is below 1.0 (1.0 is much better in sim)
     use_speed_profile_drive_speed: false      # true: blend profile speed into final /drive.speed command.
     # speed_profile_drive_blend: 0.5           # 0 = pure MPPI accel command; 1 = pure raceline/profile speed command.
-    speed_profile_drive_lookahead_steps: 1   # Command brake lookahead: which future ref speed drives /drive.speed.
+    speed_profile_drive_lookahead_steps: -1   # Command brake lookahead: which future ref speed drives /drive.speed.
     # speed_profile_drive_use_min_lookahead: true # true: use min speed through lookahead to avoid early exit accel.
     # speed_profile_drive_max_accel: 2.5       # Max commanded speed increase in m/s^2, using real callback dt.
     # speed_profile_drive_max_decel: 8.0       # Max commanded speed decrease in m/s^2; usually higher than accel.
