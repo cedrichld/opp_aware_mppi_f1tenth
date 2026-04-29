@@ -97,10 +97,14 @@ class MPPI():
             getattr(self.config, 'opponent_cost_power', 2.0),
             getattr(self.config, 'opponent_cost_discount', 1.0),
             getattr(self.config, 'opponent_behavior_mode_id', 0.0),
-            getattr(self.config, 'opponent_follow_weight', 0.0),
+            # Gate follow/pass weights by opponent_enabled too — otherwise the
+            # zero-init opponent_xy_horizon (all (0, 0)) is treated as a
+            # stationary opponent at map origin and MPPI swerves to "follow"
+            # or "pass" it whenever no real opponent is active.
+            getattr(self.config, 'opponent_follow_weight', 0.0) if opponent_enabled else 0.0,
             getattr(self.config, 'opponent_follow_distance', 1.2),
             getattr(self.config, 'opponent_same_lane_width', 0.7),
-            getattr(self.config, 'opponent_pass_weight', 0.0),
+            getattr(self.config, 'opponent_pass_weight', 0.0) if opponent_enabled else 0.0,
             getattr(self.config, 'opponent_pass_lateral_offset', 0.55),
             getattr(self.config, 'opponent_pass_longitudinal_window', 1.5),
         ]

@@ -190,6 +190,13 @@ class MPPI_Node(Node):
             'closing_speed': 0.0,
             'pass_allowed': 0.0,
         }
+        # Auto-overtake state machine. Stateless re-evaluation every callback
+        # caused mode flicker at boundary conditions (closing speed dipping
+        # near min, clearance crossing threshold mid-pass). Track which side
+        # we committed to and when, so a brief dip doesn't abort the pass.
+        self.auto_state = 'idle'           # idle | follow | pass_left | pass_right
+        self.auto_state_entered_at = None  # wall time the current state was entered
+        self._auto_warned_no_wall_sdf = False
 
         
         qos = rclpy.qos.QoSProfile(
@@ -375,11 +382,17 @@ class MPPI_Node(Node):
             'opponent_pass_lateral_offset': 0.55,
             'opponent_pass_longitudinal_window': 1.5,
             'opponent_auto_wall_check_enabled': True,
-            'opponent_auto_min_wall_clearance': 0.45,
+            'opponent_auto_min_wall_clearance': 0.45,    # ENTER clearance (decide to pass)
             'opponent_auto_check_steps': 3,
-            'opponent_auto_min_closing_speed': 0.4,
+            'opponent_auto_min_closing_speed': 0.4,      # ENTER closing speed
             'opponent_auto_max_ahead_distance': 4.0,
             'opponent_auto_side_switch_margin': 0.08,
+            # Hysteresis: looser exit thresholds so a transient dip mid-pass
+            # doesn't abort a committed overtake. Defaults are 0 -> derived
+            # from the enter values when not explicitly set (see get_params).
+            'opponent_auto_exit_wall_clearance': 0.0,
+            'opponent_auto_exit_closing_speed': 0.0,
+            'opponent_auto_min_commit_sec': 0.5,         # min time to stay committed once a side is chosen
             'slip_cost_enabled': False,
             'slip_cost_weight': 0.0,
             'slip_cost_beta_safe': 0.2,
@@ -625,6 +638,15 @@ class MPPI_Node(Node):
         declf('opponent_auto_side_switch_margin', self.config.opponent_auto_side_switch_margin,
               fdesc('Hysteresis: extra clearance needed to flip preferred pass side (m).',
                     0.0, 1.0, 0.01))
+        declf('opponent_auto_exit_wall_clearance', self.config.opponent_auto_exit_wall_clearance,
+              fdesc('EXIT clearance — abort an in-progress pass if wall clearance falls below this. '
+                    '0 means auto-derive from enter clearance (= 0.7x).', 0.0, 2.0, 0.01))
+        declf('opponent_auto_exit_closing_speed', self.config.opponent_auto_exit_closing_speed,
+              fdesc('EXIT closing speed — abort an in-progress pass if closing falls below this. '
+                    '0 means auto-derive from enter closing (= 0.4x).', 0.0, 5.0, 0.05))
+        declf('opponent_auto_min_commit_sec', self.config.opponent_auto_min_commit_sec,
+              fdesc('Minimum time to stay committed once a pass side is chosen (s).',
+                    0.0, 5.0, 0.05))
         declf('opponent_pass_longitudinal_window', self.config.opponent_pass_longitudinal_window,
               fdesc('Longitudinal window where pass-side cost applies (m).',
                     0.05, 5.0, 0.05))
@@ -846,6 +868,23 @@ class MPPI_Node(Node):
         self.config.opponent_auto_side_switch_margin = max(
             0.0,
             float(self.get_parameter('opponent_auto_side_switch_margin').value),
+        )
+        # Auto-derive exit thresholds from enter thresholds when unset (=0).
+        # Looser exits = hysteresis: a transient dip during a committed pass
+        # won't abort it.
+        exit_clear_param = float(self.get_parameter('opponent_auto_exit_wall_clearance').value)
+        self.config.opponent_auto_exit_wall_clearance = (
+            exit_clear_param if exit_clear_param > 1e-6
+            else 0.7 * self.config.opponent_auto_min_wall_clearance
+        )
+        exit_closing_param = float(self.get_parameter('opponent_auto_exit_closing_speed').value)
+        self.config.opponent_auto_exit_closing_speed = (
+            exit_closing_param if exit_closing_param > 1e-6
+            else 0.4 * self.config.opponent_auto_min_closing_speed
+        )
+        self.config.opponent_auto_min_commit_sec = max(
+            0.0,
+            float(self.get_parameter('opponent_auto_min_commit_sec').value),
         )
         self.config.slip_cost_enabled = bool(self.get_parameter('slip_cost_enabled').value)
         self.config.slip_cost_weight = max(
@@ -1139,6 +1178,20 @@ class MPPI_Node(Node):
         return float(np.nanmin(wall_dist))
 
     def apply_auto_opponent_behavior(self, state_c_0, reference_traj, opponent_traj, opponent_active):
+        """Auto-overtake state machine.
+
+        States: idle | follow | pass_left | pass_right.
+
+        Hysteresis: enter thresholds (decide to start a pass) are stricter
+        than exit thresholds (decide to abort one). A minimum commit time
+        keeps a chosen side locked in for at least opponent_auto_min_commit_sec
+        so a one-frame dip in clearance / closing speed doesn't cancel an
+        in-progress overtake.
+
+        Mode IDs (consumed by the cost function):
+          0 = follow, 1 = clear (no opp cost), 2 = pass_left, 3 = pass_right.
+        """
+        # Default debug snapshot for stats.
         self.opponent_auto_debug = {
             'mode_id': float(self.config.opponent_behavior_mode_id),
             'left_clearance': -1.0,
@@ -1148,58 +1201,116 @@ class MPPI_Node(Node):
         }
         if self.config.opponent_behavior_mode != 'auto':
             return
+
+        # Helper: transition to a new state, stamp the entry time.
+        def goto(new_state, mode_id):
+            if self.auto_state != new_state:
+                self.auto_state = new_state
+                self.auto_state_entered_at = self.now_sec()
+            self.config.opponent_behavior_mode_id = mode_id
+            self.opponent_auto_debug['mode_id'] = float(mode_id)
+
+        # No opponent at all -> reset to idle, no opp cost active.
         if not opponent_active:
-            self.config.opponent_behavior_mode_id = 1.0
-            self.opponent_auto_debug['mode_id'] = 1.0
+            goto('idle', 1.0)
             return
 
+        # Geometry vs ego.
         ego_xy = np.asarray(state_c_0[:2], dtype=float)
         ego_speed = float(state_c_0[3])
         opp_xy = np.asarray(opponent_traj[0, :2], dtype=float)
         ref_yaw = float(reference_traj[0, 3])
         tangent = np.asarray([np.cos(ref_yaw), np.sin(ref_yaw)], dtype=float)
+        rel = opp_xy - ego_xy
+        ahead_distance = float(np.dot(rel, tangent))
 
-        rel_ego_to_opp = opp_xy - ego_xy
-        ahead_distance = float(np.dot(rel_ego_to_opp, tangent))
         opponent_speed = self.opponent_horizon_speed(opponent_traj)
         desired_speed = max(ego_speed, float(reference_traj[0, 2]))
         closing_speed = desired_speed - opponent_speed
-
         self.opponent_auto_debug['closing_speed'] = float(closing_speed)
 
         opponent_relevant = (
             ahead_distance > -0.25
             and ahead_distance <= self.config.opponent_auto_max_ahead_distance
         )
+        # Opp behind us or out of range -> reset to idle (NOT follow), so we
+        # exit any in-progress pass cleanly.
         if not opponent_relevant:
-            self.config.opponent_behavior_mode_id = 1.0
-            self.opponent_auto_debug['mode_id'] = 1.0
+            goto('idle', 1.0)
             return
 
-        left_clearance = self.opponent_pass_clearance(opponent_traj, reference_traj, side=1.0)
-        right_clearance = self.opponent_pass_clearance(opponent_traj, reference_traj, side=-1.0)
-        self.opponent_auto_debug['left_clearance'] = left_clearance
-        self.opponent_auto_debug['right_clearance'] = right_clearance
-
-        min_clearance = float(self.config.opponent_auto_min_wall_clearance)
-        closing_enough = closing_speed >= self.config.opponent_auto_min_closing_speed
-        left_allowed = left_clearance >= min_clearance
-        right_allowed = right_clearance >= min_clearance
-
-        if not closing_enough or (not left_allowed and not right_allowed):
-            self.config.opponent_behavior_mode_id = 0.0
-            self.opponent_auto_debug['mode_id'] = 0.0
-            return
-
-        self.opponent_auto_debug['pass_allowed'] = 1.0
-        margin = float(self.config.opponent_auto_side_switch_margin)
-        if left_allowed and (not right_allowed or left_clearance >= right_clearance + margin):
-            self.config.opponent_behavior_mode_id = 2.0
-        elif right_allowed:
-            self.config.opponent_behavior_mode_id = 3.0
+        # Clearances. opponent_pass_clearance returns 0 when wall_sdf is
+        # missing; warn once and treat both sides as "wall info unavailable"
+        # (= clearance unconstrained) instead of silently never passing.
+        wall_sdf_present = getattr(self.infer_env, 'wall_sdf', None) is not None
+        if not wall_sdf_present and not self._auto_warned_no_wall_sdf:
+            self.get_logger().warn(
+                "Auto-overtake: wall_sdf not loaded -> wall-clearance gating disabled. "
+                "Set wall_cost_enabled=true and a valid wall_cost_map_yaml to re-enable."
+            )
+            self._auto_warned_no_wall_sdf = True
+        if wall_sdf_present:
+            left_clear = self.opponent_pass_clearance(opponent_traj, reference_traj, side=1.0)
+            right_clear = self.opponent_pass_clearance(opponent_traj, reference_traj, side=-1.0)
         else:
-            self.config.opponent_behavior_mode_id = 2.0
-        self.opponent_auto_debug['mode_id'] = float(self.config.opponent_behavior_mode_id)
+            # Sentinel: both sides "clear" but mark debug to make it visible.
+            left_clear = right_clear = 999.0
+        self.opponent_auto_debug['left_clearance'] = left_clear
+        self.opponent_auto_debug['right_clearance'] = right_clear
+
+        # Thresholds.
+        enter_clear = float(self.config.opponent_auto_min_wall_clearance)
+        exit_clear = float(self.config.opponent_auto_exit_wall_clearance)
+        enter_closing = float(self.config.opponent_auto_min_closing_speed)
+        exit_closing = float(self.config.opponent_auto_exit_closing_speed)
+        side_margin = float(self.config.opponent_auto_side_switch_margin)
+        min_commit = float(self.config.opponent_auto_min_commit_sec)
+
+        # ---- If we're already committed to a pass, decide whether to stay. ----
+        if self.auto_state in ('pass_left', 'pass_right'):
+            side_clear = left_clear if self.auto_state == 'pass_left' else right_clear
+            side_id = 2.0 if self.auto_state == 'pass_left' else 3.0
+            time_in_state = self.now_sec() - (self.auto_state_entered_at or self.now_sec())
+            self.opponent_auto_debug['pass_allowed'] = 1.0
+
+            # Below min commit time: lock in regardless of transient dips.
+            if time_in_state < min_commit:
+                goto(self.auto_state, side_id)
+                return
+            # After min commit: abort only if EXIT thresholds are violated.
+            committed_pass_failed = (
+                side_clear < exit_clear or closing_speed < exit_closing
+            )
+            if not committed_pass_failed:
+                goto(self.auto_state, side_id)
+                return
+            # Pass failed mid-commit -> revert to follow (don't go straight to
+            # idle; we're still close to opp and follow keeps a safe gap).
+            self.get_logger().info(
+                f"Auto-overtake: aborting {self.auto_state} "
+                f"(side_clear={side_clear:.2f}, closing={closing_speed:.2f})"
+            )
+            goto('follow', 0.0)
+            # Fall through to engage check (could re-engage other side).
+
+        # ---- State is idle/follow: decide whether to engage a new pass. ----
+        if closing_speed < enter_closing:
+            goto('follow', 0.0)
+            return
+
+        left_ok = left_clear >= enter_clear
+        right_ok = right_clear >= enter_clear
+        if not left_ok and not right_ok:
+            goto('follow', 0.0)
+            return
+
+        # Both/either OK -> commit. side_margin gives left a small preference
+        # only when both sides are similarly clear (avoids flipping in noise).
+        if left_ok and (not right_ok or left_clear >= right_clear + side_margin):
+            goto('pass_left', 2.0)
+        else:
+            goto('pass_right', 3.0)
+        self.opponent_auto_debug['pass_allowed'] = 1.0
 
     def reset_state_estimator(self):
         self.prev_pose_time = None
