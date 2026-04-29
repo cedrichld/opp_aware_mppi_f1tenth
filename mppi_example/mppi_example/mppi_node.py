@@ -149,6 +149,11 @@ class MPPI_Node(Node):
         self.latest_pose_msg = None
         self.latest_pose_recv_time = None
         self.last_control_step_wall_time = None
+        # Visualization-only rollout. Populated when use_pose_delta_state_estimate
+        # is true so the marker shows a clean (raw-twist-rolled) trajectory
+        # while the controller still solved against the IIR-estimated state.
+        # publish_visualization prefers this when non-None.
+        self.viz_traj_opt = None
         # Rolling stats for the periodic logger.
         self._stats_window_start = time.time()
         self._stats_pose_rx = 0
@@ -1402,7 +1407,8 @@ class MPPI_Node(Node):
             self.reference_marker_pub.publish(marker_array)
 
         if self.opt_traj_marker_pub.get_subscription_count() > 0:
-            opt_traj_xy = self.mppi_state_trajectory_to_xy(numpify(self.mppi.traj_opt))
+            traj_for_viz = self.viz_traj_opt if self.viz_traj_opt is not None else self.mppi.traj_opt
+            opt_traj_xy = self.mppi_state_trajectory_to_xy(numpify(traj_for_viz))
             marker_array = MarkerArray()
             marker_array.markers.append(self.make_line_strip_marker(
                 'mppi_optimal_trajectory',
@@ -1648,6 +1654,33 @@ class MPPI_Node(Node):
 
         if not bad_mppi_output and np.isfinite(a_opt_cpu).all():
             self.mppi_bad_output_count = 0
+
+        # Visualization-only rollout from raw twist. Decouples the marker
+        # from the IIR estimator's noisy (vy, wz, beta), which causes the
+        # multimodal cost landscape to flip the optimal sample's trajectory
+        # shape between callbacks even when the actual /drive command (a
+        # weighted average over samples) is smooth. /opt_traj_arr and the
+        # reward-debug topics still consume the controller-truth traj_opt.
+        self.viz_traj_opt = None
+        if (
+            self.config.render
+            and self.config.use_pose_delta_state_estimate
+            and not bad_mppi_output
+        ):
+            raw_vx = max(float(twist.linear.x), self.config.init_vel)
+            raw_wz = float(twist.angular.z)
+            raw_beta = float(np.arctan2(float(twist.linear.y), max(abs(raw_vx), 1e-6)))
+            viz_state = state_c_0.copy()
+            viz_state[3] = raw_vx
+            viz_state[5] = raw_wz
+            viz_state[6] = raw_beta
+            self.viz_traj_opt = self.mppi.rollout(
+                self.mppi.a_opt,
+                jnp.asarray(viz_state),
+                self.mppi.jrng.new_key(),
+                jnp.asarray(self.config.norm_params, dtype=jnp.float32),
+                jnp.asarray(self.config.friction, dtype=jnp.float32),
+            )
 
         mppi_control = a_opt_cpu[0] * self.config.norm_params[0, :2]/2
         prev_speed_command = float(self.control[1])

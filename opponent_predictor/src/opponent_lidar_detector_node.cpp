@@ -527,7 +527,27 @@ private:
     return clusters;
   }
 
-  bool buildCandidate(
+  // Per-scan rejection tally so the user can see *why* clusters fail.
+  // Filled by buildCandidate, aggregated in selectCandidate, summarized in
+  // scanCallback (throttled). Not load-bearing — pure diagnostic.
+  struct RejectTally {
+    int accepted = 0;
+    int cluster_size = 0;
+    int base_x = 0;
+    int proj_distance = 0;
+    int extent = 0;
+    int proj_distance_post = 0;
+    int implied_speed = 0;
+    int candidate_jump = 0;
+    double best_proj_distance = std::numeric_limits<double>::infinity();
+  };
+
+  enum class CandidateOutcome {
+    kAccepted, kClusterSize, kBaseX, kProjDistance, kExtent,
+    kProjDistancePost, kImpliedSpeed, kCandidateJump,
+  };
+
+  CandidateOutcome buildCandidate(
     const std::vector<int> & cluster,
     const std::vector<ScanPoint> & points,
     const rclcpp::Time & stamp,
@@ -537,7 +557,7 @@ private:
       cluster.size() < static_cast<std::size_t>(min_cluster_points_) ||
       cluster.size() > static_cast<std::size_t>(max_cluster_points_))
     {
-      return false;
+      return CandidateOutcome::kClusterSize;
     }
 
     for (const int idx : cluster) {
@@ -555,12 +575,13 @@ private:
     candidate.range = std::hypot(candidate.centroid_base_x, candidate.centroid_base_y);
 
     if (candidate.centroid_base_x < min_base_x_) {
-      return false;
+      return CandidateOutcome::kBaseX;
     }
 
     const TrackProjection proj = projectToTrack(candidate.centroid_x, candidate.centroid_y);
     if (proj.distance > max_raceline_projection_dist_) {
-      return false;
+      candidate.projection_distance = proj.distance;  // for tally summary
+      return CandidateOutcome::kProjDistance;
     }
 
     const double tx = std::cos(proj.yaw);
@@ -586,7 +607,7 @@ private:
     candidate.extent_n = std::max(0.0, max_n - min_n);
     const double max_extent = std::max(candidate.extent_t, candidate.extent_n);
     if (max_extent < min_cluster_extent_ || max_extent > max_cluster_extent_) {
-      return false;
+      return CandidateOutcome::kExtent;
     }
 
     const double view_x = candidate.centroid_x - ego_x_;
@@ -616,7 +637,7 @@ private:
     candidate.projection_distance = corrected_proj.distance;
 
     if (candidate.projection_distance > max_raceline_projection_dist_) {
-      return false;
+      return CandidateOutcome::kProjDistancePost;
     }
 
     candidate.score =
@@ -632,31 +653,46 @@ private:
         const double candidate_s = unwrapS(candidate.center_s, last_detection_s_);
         const double implied_progress_speed = std::abs(candidate_s - last_detection_s_) / age;
         if (implied_progress_speed > max_detection_speed_) {
-          return false;
+          return CandidateOutcome::kImpliedSpeed;
         }
       }
       if (age >= 0.0 && age < continuity_gate_timeout_ && jump > max_candidate_jump_) {
-        return false;
+        return CandidateOutcome::kCandidateJump;
       }
       if (age >= 0.0 && age < continuity_gate_timeout_) {
         candidate.score += continuity_weight_ * jump;
       }
     }
 
-    return true;
+    return CandidateOutcome::kAccepted;
   }
 
   bool selectCandidate(
     const std::vector<ScanPoint> & points,
     const std::vector<std::vector<int>> & clusters,
     const rclcpp::Time & stamp,
-    ClusterCandidate & selected) const
+    ClusterCandidate & selected,
+    RejectTally & tally) const
   {
     bool found = false;
     for (const auto & cluster : clusters) {
       ClusterCandidate candidate;
-      if (!buildCandidate(cluster, points, stamp, candidate)) {
-        continue;
+      const auto outcome = buildCandidate(cluster, points, stamp, candidate);
+      // Track the best (smallest) projection distance we've seen this scan
+      // — tells the user how close they are to the threshold.
+      if (std::isfinite(candidate.projection_distance)) {
+        tally.best_proj_distance = std::min(
+          tally.best_proj_distance, candidate.projection_distance);
+      }
+      switch (outcome) {
+        case CandidateOutcome::kAccepted: tally.accepted++; break;
+        case CandidateOutcome::kClusterSize: tally.cluster_size++; continue;
+        case CandidateOutcome::kBaseX: tally.base_x++; continue;
+        case CandidateOutcome::kProjDistance: tally.proj_distance++; continue;
+        case CandidateOutcome::kExtent: tally.extent++; continue;
+        case CandidateOutcome::kProjDistancePost: tally.proj_distance_post++; continue;
+        case CandidateOutcome::kImpliedSpeed: tally.implied_speed++; continue;
+        case CandidateOutcome::kCandidateJump: tally.candidate_jump++; continue;
       }
       if (!found || candidate.score < selected.score) {
         selected = candidate;
@@ -892,7 +928,8 @@ private:
 
     const auto clusters = clusterPoints(dynamic_points);
     ClusterCandidate selected;
-    const bool found = selectCandidate(dynamic_points, clusters, stamp, selected);
+    RejectTally tally;
+    const bool found = selectCandidate(dynamic_points, clusters, stamp, selected, tally);
     double progress_speed = 0.0;
     if (found && has_last_detection_) {
       const double dt = (stamp - last_detection_stamp_).seconds();
@@ -917,10 +954,17 @@ private:
 
     const auto cb_dt_ms = std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - cb_t0).count();
+    const double best_d = std::isfinite(tally.best_proj_distance) ?
+      tally.best_proj_distance : -1.0;
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 2000,
-      "scanCallback %.2f ms | dyn_pts=%zu clusters=%zu",
-      cb_dt_ms, dynamic_points.size(), clusters.size());
+      "scanCallback %.2f ms | dyn_pts=%zu clusters=%zu | "
+      "accepted=%d reject{size=%d, base_x=%d, proj=%d, extent=%d, "
+      "proj_post=%d, speed=%d, jump=%d} best_proj_d=%.2f (thresh=%.2f)",
+      cb_dt_ms, dynamic_points.size(), clusters.size(),
+      tally.accepted, tally.cluster_size, tally.base_x, tally.proj_distance,
+      tally.extent, tally.proj_distance_post, tally.implied_speed,
+      tally.candidate_jump, best_d, max_raceline_projection_dist_);
   }
 
   std::string scan_topic_;

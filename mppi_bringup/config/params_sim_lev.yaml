@@ -11,6 +11,9 @@ lmppi_node:
     random_seed: 527787           # Sampling seed. Keep fixed for repeatable tuning runs.
     render: true                  # true keeps optimal/sampled rollouts available for visualization.
 
+    # timer
+    control_loop_hz: 50.0
+
     # Live tuning parameters: mppi_node.get_params() refreshes these on every
     # odometry callback, so they can be changed with ros2 param set.
     temperature: 0.01             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
