@@ -38,14 +38,14 @@ opponent_lidar_detector:
 
     cluster_tolerance: 0.18
     min_cluster_points: 4
-    max_cluster_points: 100
+    max_cluster_points: 200
     min_cluster_extent: 0.08
     max_cluster_extent: 0.65
 
     # Tight by default: true car detections in current sim bags sat around
     # 0.0-0.3 m from the raceline; false wall/noise detections were usually
     # around 0.6-1.2 m.
-    max_raceline_projection_dist: 0.3 # important tuning knob
+    max_raceline_projection_dist: 0.6 # important tuning knob
     max_candidate_jump: 0.8
     continuity_gate_timeout: 0.4
     continuity_weight: 2.0
