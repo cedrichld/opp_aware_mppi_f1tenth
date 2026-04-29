@@ -134,5 +134,5 @@ lmppi_node:
     reference_line_width: 0.06        # Blue reference trajectory line width.
     optimal_line_width: 0.08          # Green optimal rollout line width.
     sampled_line_width: 0.025         # Orange sampled rollout line width.
-    sampled_trajectory_count: 32      # Number of sampled rollouts to draw. Higher is heavier in RViz.
+    sampled_trajectory_count: 0      # Number of sampled rollouts to draw. Higher is heavier in RViz.
     sampled_trajectory_alpha: 0.18    # Transparency for sampled rollouts.
