@@ -139,7 +139,8 @@ class MPPI_Node(Node):
         self.last_speed_command_time = None
         self.last_pose_callback_wall_time = None
         self.last_pose_msg_time = None
-        self.mppi_guard_count = 0
+        self.mppi_guard_count = 0          # HARD guards (warm-start wiped)
+        self.mppi_soft_guard_count = 0     # SOFT guards (timing gap noted, warm-start kept)
         self.mppi_saturation_count = 0
         self.mppi_bad_output_count = 0
 
@@ -164,6 +165,7 @@ class MPPI_Node(Node):
         self._stats_solve_times = []
         self._stats_pose_age = 0.0
         self._stats_guard_count_at_window_start = 0
+        self._stats_soft_guard_count_at_window_start = 0
         self._stats_opponent_rx = 0
         self.last_timing_debug = {
             'callback_wall_dt': 0.0,
@@ -390,6 +392,12 @@ class MPPI_Node(Node):
             'mppi_guard_on_timing_jump': True,
             'mppi_guard_wall_gap': 0.25,
             'mppi_guard_stamp_gap': 0.25,
+            # Hard reset threshold: only WIPE the warm-start when a real
+            # stall happens (process freeze, JAX recompile, multi-second
+            # disk I/O spike). For moderate PF jitter (above the soft
+            # wall_gap/stamp_gap thresholds but below this), continuity is
+            # more valuable than starting fresh, so we only log/count.
+            'mppi_guard_hard_gap': 1.5,
             'mppi_guard_aopt_threshold': 0.98,
             'mppi_guard_saturation_callbacks': 4,
             'mppi_guard_bad_callbacks_to_clear_control': 3,
@@ -673,7 +681,9 @@ class MPPI_Node(Node):
         declf('mppi_guard_wall_gap', self.config.mppi_guard_wall_gap,
               fdesc('Wall-time callback gap that clears persistent MPPI/control state.', 0.05, 2.0, 0.01))
         declf('mppi_guard_stamp_gap', self.config.mppi_guard_stamp_gap,
-              fdesc('Odom stamp gap that clears persistent MPPI/control state.', 0.05, 2.0, 0.01))
+              fdesc('SOFT odom stamp gap. Above this we count + log; below mppi_guard_hard_gap we KEEP the warm-start.', 0.05, 2.0, 0.01))
+        declf('mppi_guard_hard_gap', self.config.mppi_guard_hard_gap,
+              fdesc('HARD wall/stamp gap. Above this we wipe the warm-start (real stall).', 0.1, 5.0, 0.05))
         declf('mppi_guard_aopt_threshold', self.config.mppi_guard_aopt_threshold,
               fdesc('Clear warm-start if first-action components remain near saturation.', 0.5, 1.0, 0.01))
         decli('mppi_guard_saturation_callbacks', self.config.mppi_guard_saturation_callbacks,
@@ -949,6 +959,10 @@ class MPPI_Node(Node):
             0.0,
             float(self.get_parameter('mppi_guard_stamp_gap').value),
         )
+        self.config.mppi_guard_hard_gap = max(
+            self.config.mppi_guard_stamp_gap,
+            float(self.get_parameter('mppi_guard_hard_gap').value),
+        )
         self.config.mppi_guard_aopt_threshold = float(np.clip(
             float(self.get_parameter('mppi_guard_aopt_threshold').value),
             0.0,
@@ -1219,16 +1233,41 @@ class MPPI_Node(Node):
             )
 
     def maybe_guard_for_timing(self, wall_dt, stamp_dt):
+        """Two-tier guard.
+
+        HARD events (gap >= mppi_guard_hard_gap, or non-monotonic stamps)
+        wipe the warm-start — the optimizer's previous plan is too stale to
+        be safely shifted forward. Examples: 4 s process freeze, JAX
+        recompile, multi-second disk I/O spike.
+
+        SOFT events (gap above the legacy wall_gap/stamp_gap thresholds but
+        below the hard threshold) just log + count. We KEEP the warm-start
+        because for ~0.3-1.5 s gaps the prior plan is still mostly valid,
+        and zeroing a_opt forces several cold solves which feel like a
+        steering lag at high speed.
+        """
         if not getattr(self.config, 'mppi_guard_on_timing_jump', True):
             return
-        if wall_dt > self.config.mppi_guard_wall_gap:
-            self.clear_persistent_mppi_state(f"wall callback gap {wall_dt:.3f}s")
+        hard_gap = self.config.mppi_guard_hard_gap
+        # HARD: definitely reset.
+        if wall_dt > hard_gap:
+            self.clear_persistent_mppi_state(f"HARD wall callback gap {wall_dt:.3f}s")
             return
         if stamp_dt <= 0.0:
             self.clear_persistent_mppi_state(f"non-monotonic odom stamp dt {stamp_dt:.3f}s")
             return
-        if stamp_dt > self.config.mppi_guard_stamp_gap:
-            self.clear_persistent_mppi_state(f"odom stamp gap {stamp_dt:.3f}s")
+        if stamp_dt > hard_gap:
+            self.clear_persistent_mppi_state(f"HARD odom stamp gap {stamp_dt:.3f}s")
+            return
+        # SOFT: log throttled, keep warm-start. Counted in mppi_soft_guard_count
+        # so stats_timer can show it without flooding the terminal.
+        if wall_dt > self.config.mppi_guard_wall_gap or \
+                (stamp_dt != 0.0 and stamp_dt > self.config.mppi_guard_stamp_gap):
+            self.mppi_soft_guard_count += 1
+            self.get_logger().warn(
+                f"SOFT timing gap (warm-start kept): wall={wall_dt:.3f}s stamp={stamp_dt:.3f}s",
+                throttle_duration_sec=1.0,
+            )
 
     def sanitize_opponent_horizon(self):
         horizon = np.asarray(self.opponent_xy_horizon, dtype=np.float32)
@@ -1805,6 +1844,7 @@ class MPPI_Node(Node):
         if window <= 0.0:
             return
         guard_delta = self.mppi_guard_count - self._stats_guard_count_at_window_start
+        soft_guard_delta = self.mppi_soft_guard_count - self._stats_soft_guard_count_at_window_start
         solves = self._stats_solve_times
         if solves:
             arr = np.asarray(solves, dtype=float)
@@ -1817,7 +1857,7 @@ class MPPI_Node(Node):
             "MPPI {:5.1f}Hz | pose_rx {:5.1f}Hz | drive_tx {:5.1f}Hz | "
             "ctrl_ticks {:5.1f}Hz (skip stale={} no_pose={}) | "
             "solve mean={:5.1f}ms p99={:5.1f}ms max={:5.1f}ms | "
-            "pose_age={:5.1f}ms | guard+={} | opp_rx {:4.1f}Hz".format(
+            "pose_age={:5.1f}ms | guard+={} (soft+={}) | opp_rx {:4.1f}Hz".format(
                 self._stats_drive_tx / window,
                 self._stats_pose_rx / window,
                 self._stats_drive_tx / window,
@@ -1829,6 +1869,7 @@ class MPPI_Node(Node):
                 solve_max * 1000.0,
                 self._stats_pose_age * 1000.0,
                 guard_delta,
+                soft_guard_delta,
                 self._stats_opponent_rx / window,
             )
         )
@@ -1841,6 +1882,7 @@ class MPPI_Node(Node):
         self._stats_control_skips_no_pose = 0
         self._stats_solve_times = []
         self._stats_guard_count_at_window_start = self.mppi_guard_count
+        self._stats_soft_guard_count_at_window_start = self.mppi_soft_guard_count
         self._stats_opponent_rx = 0
 
 
