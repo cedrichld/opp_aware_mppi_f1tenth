@@ -32,7 +32,7 @@ lmppi_node:
     speed_profile_scale: 1.4          # Multiplies raceline vx_mps. Raise to push pace; lower for stability.
     speed_profile_min_speed: 1.0       # Lower clamp for reference/profile speed after scaling.
     speed_profile_max_speed: 12.0      # Upper clamp for reference/profile speed after scaling.
-    speed_profile_lookahead_steps: 0   # Planning brake lookahead: min speed over current..N future ref steps.
+    speed_profile_lookahead_steps: 3   # Planning brake lookahead: min speed over current..N future ref steps.
     speed_profile_iterations: 3        # Rebuild reference using profiled speeds this many times; 2-3 is enough.
 
     # Feedforward from raceline vx_mps to /drive.speed. MPPI still

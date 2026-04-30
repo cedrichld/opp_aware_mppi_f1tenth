@@ -314,7 +314,8 @@ class MPPI_Node(Node):
         # effectively never fires for the duration of a race session.
         # Gen-0/1 stay auto (cheap, sub-ms). Cyclic-only objects may
         # accumulate, but for minute-scale sessions JAX's heap is bounded.
-        gc.set_threshold(700, 10, 100000)
+        gc.set_threshold(700, 10, 100000) # extend gen-2 gc to avoid soft timing gaps
+        # gc.disable() # remove gen-1 as well, didnt change anything
 
     def update_raceline_callback(self, request, response):
         try:
