@@ -212,6 +212,7 @@ class MPPI_Node(Node):
         # we committed to and when, so a brief dip doesn't abort the pass.
         self.auto_state = 'idle'           # idle | follow | pass_left | pass_right
         self.auto_state_entered_at = None  # wall time the current state was entered
+        self.auto_last_abort_at = None     # wall time of the last pass abort (for cooldown)
         self._auto_warned_no_wall_sdf = False
 
         
@@ -430,6 +431,7 @@ class MPPI_Node(Node):
             'opponent_auto_exit_wall_clearance': 0.0,
             'opponent_auto_exit_closing_speed': 0.0,
             'opponent_auto_min_commit_sec': 0.5,         # min time to stay committed once a side is chosen
+            'opponent_auto_pass_cooldown_sec': 1.5,      # min time in follow after abort before re-engaging
             'slip_cost_enabled': False,
             'slip_cost_weight': 0.0,
             'slip_cost_beta_safe': 0.2,
@@ -684,6 +686,9 @@ class MPPI_Node(Node):
         declf('opponent_auto_min_commit_sec', self.config.opponent_auto_min_commit_sec,
               fdesc('Minimum time to stay committed once a pass side is chosen (s).',
                     0.0, 5.0, 0.05))
+        declf('opponent_auto_pass_cooldown_sec', self.config.opponent_auto_pass_cooldown_sec,
+              fdesc('After an abort, must spend at least this long in follow before any new pass can engage (s).',
+                    0.0, 10.0, 0.1))
         declf('opponent_pass_longitudinal_window', self.config.opponent_pass_longitudinal_window,
               fdesc('Longitudinal window where pass-side cost applies (m).',
                     0.05, 5.0, 0.05))
@@ -922,6 +927,10 @@ class MPPI_Node(Node):
         self.config.opponent_auto_min_commit_sec = max(
             0.0,
             float(self.get_parameter('opponent_auto_min_commit_sec').value),
+        )
+        self.config.opponent_auto_pass_cooldown_sec = max(
+            0.0,
+            float(self.get_parameter('opponent_auto_pass_cooldown_sec').value),
         )
         self.config.slip_cost_enabled = bool(self.get_parameter('slip_cost_enabled').value)
         self.config.slip_cost_weight = max(
@@ -1335,16 +1344,31 @@ class MPPI_Node(Node):
             if not committed_pass_failed:
                 goto(self.auto_state, side_id)
                 return
-            # Pass failed mid-commit -> revert to follow (don't go straight to
-            # idle; we're still close to opp and follow keeps a safe gap).
+            # Pass failed mid-commit -> revert to follow (NOT idle; we're
+            # still close to opp and follow keeps a safe gap). Stamp the
+            # abort time so the engagement check below enforces a cooldown
+            # before any new pass can engage — conservative-by-default for
+            # race conditions: a failed pass means the situation is likely
+            # not great, and trying the OTHER side immediately is the
+            # exact behaviour we don't want.
             self.get_logger().info(
                 f"Auto-overtake: aborting {self.auto_state} "
-                f"(side_clear={side_clear:.2f}, closing={closing_speed:.2f})"
+                f"(side_clear={side_clear:.2f}, closing={closing_speed:.2f}) "
+                f"-> follow + cooldown {self.config.opponent_auto_pass_cooldown_sec:.1f}s"
             )
+            self.auto_last_abort_at = self.now_sec()
             goto('follow', 0.0)
-            # Fall through to engage check (could re-engage other side).
+            return  # do NOT fall through; cooldown begins now
 
         # ---- State is idle/follow: decide whether to engage a new pass. ----
+        # Cooldown gate: don't engage again until we've been in follow for
+        # opponent_auto_pass_cooldown_sec since the last abort.
+        if self.auto_last_abort_at is not None:
+            since_abort = self.now_sec() - self.auto_last_abort_at
+            if since_abort < self.config.opponent_auto_pass_cooldown_sec:
+                goto('follow', 0.0)
+                return
+
         if closing_speed < enter_closing:
             goto('follow', 0.0)
             return
