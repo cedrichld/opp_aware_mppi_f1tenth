@@ -1,0 +1,37 @@
+# Overtaking zones for the loaded track.
+#
+# When this file is referenced by the `overtaking_zones_yaml` config key,
+# these zones act as an AUTHORITATIVE WHITELIST: the auto-overtake state
+# machine will only initiate a pass when the ego car is inside one of the
+# listed segments.  If no zones are defined (or the key is empty), the
+# node falls back to the precomputed per-waypoint pass score instead.
+#
+# How to populate this file:
+#   1. Run a solo lap and record arc-length (column 4 in the reference array,
+#      also published on /mppi/debug/opponent_auto_pass_score as the ego moves).
+#   2. Identify segments where the track is wide and straight — these are the
+#      natural overtaking windows (straights and corner exits with long run-outs).
+#   3. Set s_start / s_end in meters of arc-length along the raceline.
+#      For a wrap-around zone (crosses the lap boundary), set s_start > s_end.
+#
+# Fields:
+#   s_start        : arc-length start of the zone (m)
+#   s_end          : arc-length end   of the zone (m)
+#   preferred_side : "left", "right", or "either" (informational — not yet used
+#                    by the auto state machine, reserved for future side preference)
+#   width_margin   : minimum lateral clearance expected in this zone (m)
+#                    (informational / documentation; wall SDF check still applies)
+
+overtaking_zones:
+  # Example zone — replace with your track's actual values.
+  # A straight with good width and a long run-out before the next corner:
+  # - s_start: 10.0
+  #   s_end:   20.0
+  #   preferred_side: either
+  #   width_margin: 0.8
+
+  # Corner-exit zone onto the back straight:
+  # - s_start: 35.0
+  #   s_end:   48.0
+  #   preferred_side: left
+  #   width_margin: 0.7

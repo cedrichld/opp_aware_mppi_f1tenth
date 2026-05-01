@@ -75,6 +75,7 @@ class MPPI_Node(Node):
         'opponent_auto_right_clearance': '/mppi/debug/opponent_auto_right_clearance',
         'opponent_auto_closing_speed': '/mppi/debug/opponent_auto_closing_speed',
         'opponent_auto_pass_allowed': '/mppi/debug/opponent_auto_pass_allowed',
+        'opponent_auto_pass_score': '/mppi/debug/opponent_auto_pass_score',
         'opponent_path_age': '/mppi/debug/opponent_path_age',
         'opponent_active': '/mppi/debug/opponent_active',
         'callback_wall_dt': '/mppi/debug/callback_wall_dt',
@@ -123,6 +124,8 @@ class MPPI_Node(Node):
             temperature=self.config.temperature,
             damping=self.config.damping,
         )
+        self._build_pass_score()
+        self._load_overtaking_zones()
         self.get_params()
 
         # Do a dummy call on the MPPI to initialize the variables
@@ -461,6 +464,15 @@ class MPPI_Node(Node):
             'control_loop_hz': 25.0,
             'control_pose_stale_sec': 0.20,
             'stats_log_interval_sec': 5.0,
+            # Pass score / overtaking zone config (used at startup to build score array).
+            'overtaking_zones_yaml': '',       # path to overtaking_zones.yaml; empty = use pass score
+            'pass_score_enabled': True,        # gate auto-overtake initiation on track geometry
+            'pass_score_threshold': 0.35,      # [0-1] min score to allow initiation
+            'pass_score_curvature_threshold': 0.15,   # |kappa| rad/m above which curvature score = 0
+            'pass_score_straight_lookahead': 6.0,     # m to scan ahead for corner-clearance component
+            'pass_score_curvature_weight': 0.50,      # weight of curvature component
+            'pass_score_width_weight': 0.25,          # weight of track-width component
+            'pass_score_straight_weight': 0.25,       # weight of straight-ahead component
 
         }
         for key, value in defaults.items():
@@ -684,6 +696,15 @@ class MPPI_Node(Node):
         declf('opponent_auto_min_commit_sec', self.config.opponent_auto_min_commit_sec,
               fdesc('Minimum time to stay committed once a pass side is chosen (s).',
                     0.0, 5.0, 0.05))
+        # ---- Pass score / geometry gate ----
+        declb('pass_score_enabled', self.config.pass_score_enabled,
+              desc('Enable track-geometry pass score gate for auto-overtake initiation. '
+                   'Score = f(curvature, track width, straight-ahead length). '
+                   'Score is precomputed at startup; only the threshold is live-tunable.'))
+        declf('pass_score_threshold', self.config.pass_score_threshold,
+              fdesc('Min pass score [0-1] to allow overtake initiation. '
+                    '0 = always allow, 1 = never allow. Has no effect if overtaking_zones_yaml is set.',
+                    0.0, 1.0, 0.01))
         declf('opponent_pass_longitudinal_window', self.config.opponent_pass_longitudinal_window,
               fdesc('Longitudinal window where pass-side cost applies (m).',
                     0.05, 5.0, 0.05))
@@ -923,6 +944,10 @@ class MPPI_Node(Node):
             0.0,
             float(self.get_parameter('opponent_auto_min_commit_sec').value),
         )
+        self.config.pass_score_enabled = bool(self.get_parameter('pass_score_enabled').value)
+        self.config.pass_score_threshold = float(np.clip(
+            float(self.get_parameter('pass_score_threshold').value), 0.0, 1.0,
+        ))
         self.config.slip_cost_enabled = bool(self.get_parameter('slip_cost_enabled').value)
         self.config.slip_cost_weight = max(
             0.0,
@@ -1249,6 +1274,7 @@ class MPPI_Node(Node):
             'right_clearance': -1.0,
             'closing_speed': 0.0,
             'pass_allowed': 0.0,
+            'pass_score': -1.0,
         }
         if self.config.opponent_behavior_mode != 'auto':
             return
@@ -1355,6 +1381,15 @@ class MPPI_Node(Node):
             goto('follow', 0.0)
             return
 
+        # Geometry gate: only initiate on straights / corner exits.
+        # Uses either predefined overtaking zones or the precomputed pass score.
+        # Once committed (pass_left/pass_right), this gate is never re-checked —
+        # it only applies when deciding whether to start a new pass.
+        ego_s = float(reference_traj[0, 4]) if reference_traj.shape[0] > 0 else 0.0
+        if not self._is_pass_allowed_by_geometry(ego_s):
+            goto('follow', 0.0)
+            return
+
         # Both/either OK -> commit. side_margin gives left a small preference
         # only when both sides are similarly clear (avoids flipping in noise).
         if left_ok and (not right_ok or left_clear >= right_clear + side_margin):
@@ -1362,6 +1397,176 @@ class MPPI_Node(Node):
         else:
             goto('pass_right', 3.0)
         self.opponent_auto_debug['pass_allowed'] = 1.0
+
+    
+    #  Pass score / overtaking zones                            
+
+    def _build_pass_score(self):
+        """Precompute a per-waypoint pass score at startup.
+
+        Score components (each in [0, 1]):
+          kappa_score   — 1 on a straight, 0 at corners tighter than curvature_threshold
+          width_score   — 1 at the widest points, 0 where the track is narrower than min_width
+          straight_score — 1 with a long straight ahead, 0 with a corner immediately ahead
+
+        Final score = weighted sum, stored in self._pass_score_array indexed by waypoint.
+        """
+        track = self.infer_env.track
+        ss = np.asarray(track.ss, dtype=float)
+        n = len(ss)
+        total_len = float(track.s_frame_max)
+
+        kappa_thr = float(getattr(self.config, 'pass_score_curvature_threshold', 0.15))
+        lookahead = float(getattr(self.config, 'pass_score_straight_lookahead', 6.0))
+        w_k = float(getattr(self.config, 'pass_score_curvature_weight', 0.50))
+        w_w = float(getattr(self.config, 'pass_score_width_weight', 0.25))
+        w_s = float(getattr(self.config, 'pass_score_straight_weight', 0.25))
+
+        # --- Curvature score ---
+        has_kappa = track.ks is not None and np.any(np.abs(track.ks) > 1e-6)
+        if has_kappa:
+            abs_kappa = np.abs(np.asarray(track.ks, dtype=float))
+            kappa_score = np.clip(1.0 - abs_kappa / max(kappa_thr, 1e-6), 0.0, 1.0)
+        else:
+            kappa_score = np.ones(n)
+
+        # --- Track-width score ---
+        tr_r = np.asarray(track.tr_rights, dtype=float)
+        tr_l = np.asarray(track.tr_lefts, dtype=float)
+        has_width = np.any(tr_r > 0) or np.any(tr_l > 0)
+        if has_width:
+            total_w = tr_r + tr_l
+            p5 = float(np.percentile(total_w, 5))
+            p95 = float(np.percentile(total_w, 95))
+            span = max(p95 - p5, 1e-3)
+            width_score = np.clip((total_w - p5) / span, 0.0, 1.0)
+        else:
+            width_score = np.ones(n)
+
+        # --- Straight-ahead score: distance to next corner, normalised ---
+        # For each waypoint, scan forward until curvature exceeds threshold or
+        # lookahead is exhausted.  O(n * lookahead/avg_spacing) — fast at startup.
+        if has_kappa:
+            straight_ahead = np.zeros(n)
+            for i in range(n):
+                dist = 0.0
+                for k in range(1, n):
+                    j = (i + k) % n
+                    j_prev = (j - 1) % n
+                    ds = ss[j] - ss[j_prev]
+                    if ds < 0:
+                        ds += total_len
+                    dist += ds
+                    if dist >= lookahead:
+                        straight_ahead[i] = lookahead
+                        break
+                    if abs_kappa[j] > kappa_thr:
+                        straight_ahead[i] = dist
+                        break
+                else:
+                    straight_ahead[i] = min(dist, lookahead)
+            straight_score = np.clip(straight_ahead / max(lookahead, 1e-3), 0.0, 1.0)
+        else:
+            straight_score = np.ones(n)
+
+        # --- Combine (normalise weights so they always sum to 1) ---
+        total_w_sum = w_k + w_w + w_s
+        if total_w_sum > 0:
+            w_k /= total_w_sum
+            w_w /= total_w_sum
+            w_s /= total_w_sum
+
+        self._pass_score_array = (w_k * kappa_score + w_w * width_score + w_s * straight_score).astype(float)
+        self._pass_score_ss = ss
+        self.get_logger().info(
+            f'Pass score built: n_waypoints={n}, '
+            f'mean={float(np.mean(self._pass_score_array)):.2f}, '
+            f'min={float(np.min(self._pass_score_array)):.2f}, '
+            f'max={float(np.max(self._pass_score_array)):.2f}, '
+            f'kappa_data={has_kappa}, width_data={has_width}'
+        )
+
+    def _load_overtaking_zones(self):
+        """Load predefined overtaking zones from a YAML file.
+
+        If the file is present, its zones act as an authoritative whitelist:
+        pass initiation is allowed only inside a defined zone. If the file is
+        absent or empty, the pass score is used instead.
+
+        YAML format (see mppi_bringup/config/overtaking_zones.yaml):
+          overtaking_zones:
+            - s_start: 10.0
+              s_end:   18.0
+              preferred_side: either
+              width_margin: 0.6
+        """
+        import yaml as _yaml
+        self._overtaking_zones = []
+        zones_path = str(getattr(self.config, 'overtaking_zones_yaml', ''))
+        if not zones_path:
+            self.get_logger().info('No overtaking_zones_yaml configured; using pass score.')
+            return
+        path = Path(zones_path).expanduser().resolve()
+        if not path.exists():
+            self.get_logger().warn(f'overtaking_zones_yaml not found: {path} — using pass score.')
+            return
+        with path.open('r', encoding='utf-8') as f:
+            data = _yaml.safe_load(f)
+        for z in (data or {}).get('overtaking_zones', []):
+            self._overtaking_zones.append({
+                's_start': float(z.get('s_start', 0.0)),
+                's_end':   float(z.get('s_end',   0.0)),
+                'preferred_side': str(z.get('preferred_side', 'either')),
+                'width_margin':   float(z.get('width_margin', 0.5)),
+            })
+        self.get_logger().info(
+            f'Loaded {len(self._overtaking_zones)} overtaking zone(s) from {path}'
+        )
+
+    def _lookup_pass_score(self, ego_s_mod):
+        """Return the precomputed pass score at arc-length ego_s_mod."""
+        if not hasattr(self, '_pass_score_array') or self._pass_score_array is None:
+            return 1.0
+        idx = int(np.searchsorted(self._pass_score_ss, ego_s_mod, side='right')) - 1
+        idx = max(0, min(idx, len(self._pass_score_array) - 1))
+        return float(self._pass_score_array[idx])
+
+    def _is_pass_allowed_by_geometry(self, ego_s):
+        """Return True if track geometry permits starting an overtake at ego_s.
+
+        Priority:
+          1. If overtaking zones are configured, use them as a whitelist.
+             In-zone → allow; out-of-zone → block.
+          2. Otherwise, compare the precomputed pass score against the
+             live-tunable pass_score_threshold param.
+
+        The pass score is always computed and written to opponent_auto_debug
+        so it shows up on /mppi/debug/opponent_auto_pass_score regardless of
+        which path is taken.
+        """
+        track_len = float(self.infer_env.track.s_frame_max)
+        ego_s_mod = float(ego_s) % max(track_len, 1e-3)
+        score = self._lookup_pass_score(ego_s_mod)
+        self.opponent_auto_debug['pass_score'] = score
+
+        # --- Zones: authoritative whitelist ---
+        for zone in self._overtaking_zones:
+            s0, s1 = zone['s_start'], zone['s_end']
+            if s0 <= s1:
+                if s0 <= ego_s_mod <= s1:
+                    return True
+            else:
+                # Zone wraps around track end (e.g., s_start=90, s_end=5)
+                if ego_s_mod >= s0 or ego_s_mod <= s1:
+                    return True
+        if self._overtaking_zones:
+            return False  # zones defined but none matched
+
+        # --- No zones: fall back to pass score ---
+        if not getattr(self.config, 'pass_score_enabled', True):
+            return True
+        threshold = float(getattr(self.config, 'pass_score_threshold', 0.35))
+        return score >= threshold
 
     def reset_state_estimator(self):
         self.prev_pose_time = None
@@ -1697,6 +1902,7 @@ class MPPI_Node(Node):
         debug_terms['opponent_auto_right_clearance'] = self.opponent_auto_debug.get('right_clearance', -1.0)
         debug_terms['opponent_auto_closing_speed'] = self.opponent_auto_debug.get('closing_speed', 0.0)
         debug_terms['opponent_auto_pass_allowed'] = self.opponent_auto_debug.get('pass_allowed', 0.0)
+        debug_terms['opponent_auto_pass_score'] = self.opponent_auto_debug.get('pass_score', -1.0)
         debug_terms['callback_wall_dt'] = self.last_timing_debug.get('callback_wall_dt', 0.0)
         debug_terms['callback_stamp_dt'] = self.last_timing_debug.get('callback_stamp_dt', 0.0)
         debug_terms['prev_pose_dt'] = self.last_timing_debug.get('prev_pose_dt', 0.0)
