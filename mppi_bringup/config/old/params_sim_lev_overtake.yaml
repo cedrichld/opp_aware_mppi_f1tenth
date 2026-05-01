@@ -85,7 +85,7 @@ lmppi_node:
     opponent_pass_lateral_offset: 0.45   # Desired lateral offset from opponent during a pass.
     opponent_pass_longitudinal_window: 1.5 # Longitudinal window around opponent where pass-side cost applies.
     opponent_auto_wall_check_enabled: true
-    opponent_auto_min_wall_clearance: 0.45 # Required wall clearance at candidate pass-side points.
+    opponent_auto_min_wall_clearance: 0.3 # Required wall clearance at candidate pass-side points.
     opponent_auto_check_steps: 3          # How many opponent horizon points to check for pass clearance.
     opponent_auto_min_closing_speed: 0.4  # Required desired ego speed minus opponent speed before passing.
     opponent_auto_max_ahead_distance: 4.0 # Only consider passing opponents this far ahead along reference tangent.

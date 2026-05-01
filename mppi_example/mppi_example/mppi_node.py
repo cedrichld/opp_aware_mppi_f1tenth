@@ -14,7 +14,7 @@ from rclpy.executors import MultiThreadedExecutor
 from nav_msgs.msg import Odometry, Path as NavPath
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Point
-from std_msgs.msg import Float32, Float32MultiArray
+from std_msgs.msg import Float32, Float32MultiArray, String
 from visualization_msgs.msg import Marker, MarkerArray
 from raceline_msgs.srv import UpdateRaceline
 from rcl_interfaces.msg import ParameterDescriptor, FloatingPointRange, IntegerRange
@@ -71,7 +71,6 @@ class MPPI_Node(Node):
         'min_opponent_dist': '/mppi/debug/min_opponent_dist',
         'min_opponent_longitudinal_rel': '/mppi/debug/min_opponent_longitudinal_rel',
         'max_abs_opponent_lateral_rel': '/mppi/debug/max_abs_opponent_lateral_rel',
-        'opponent_auto_mode_id': '/mppi/debug/opponent_auto_mode_id',
         'opponent_auto_left_clearance': '/mppi/debug/opponent_auto_left_clearance',
         'opponent_auto_right_clearance': '/mppi/debug/opponent_auto_right_clearance',
         'opponent_auto_closing_speed': '/mppi/debug/opponent_auto_closing_speed',
@@ -269,6 +268,10 @@ class MPPI_Node(Node):
             key: self.create_publisher(Float32, topic, debug_qos)
             for key, topic in self.DEBUG_SCALAR_TOPICS.items()
         }
+        # Debugging: /mppi/debug/opponent_auto_mode_id.
+        self.opponent_auto_mode_name_pub = self.create_publisher(
+            String, "/mppi/debug/opponent_auto_mode_name", debug_qos,
+        )
 
         self.update_raceline_srv = self.create_service(
             UpdateRaceline, '/mppi/update_raceline', self.update_raceline_callback
@@ -623,7 +626,7 @@ class MPPI_Node(Node):
         declf('wall_cost_margin', self.config.wall_cost_margin,
               fdesc('Distance below which wall cost activates (m).', 0.0, 1.5, 0.01))
         declf('wall_cost_power', self.config.wall_cost_power,
-              fdesc('Wall cost exponent.', 1.0, 5.0, 0.1))
+              fdesc('Wall cost exponent.', 0.1, 5.0, 0.1))
         decls('wall_cost_map_yaml', self.config.wall_cost_map_yaml,
               desc('[startup] Map YAML for wall SDF (injected by launch).', read_only=True))
 
@@ -637,7 +640,7 @@ class MPPI_Node(Node):
         declf('opponent_cost_radius', self.config.opponent_cost_radius,
               fdesc('Soft keep-out radius around opponent (m).', 0.0, 3.0, 0.01))
         declf('opponent_cost_power', self.config.opponent_cost_power,
-              fdesc('Opponent cost exponent.', 1.0, 5.0, 0.1))
+              fdesc('Opponent cost exponent.', 0.1, 5.0, 0.1))
         declf('opponent_cost_discount', self.config.opponent_cost_discount,
               fdesc('Per-step discount along opponent horizon.', 0.0, 1.0, 0.01))
         declf('opponent_path_timeout', self.config.opponent_path_timeout,
@@ -814,7 +817,7 @@ class MPPI_Node(Node):
             float(self.get_parameter('wall_cost_margin').value),
         )
         self.config.wall_cost_power = max(
-            1.0,
+            0.1,
             float(self.get_parameter('wall_cost_power').value),
         )
         self.config.opponent_cost_enabled = bool(self.get_parameter('opponent_cost_enabled').value)
@@ -827,7 +830,7 @@ class MPPI_Node(Node):
             float(self.get_parameter('opponent_cost_radius').value),
         )
         self.config.opponent_cost_power = max(
-            1.0,
+            0.1,
             float(self.get_parameter('opponent_cost_power').value),
         )
         self.config.opponent_cost_discount = float(np.clip(
@@ -1690,7 +1693,6 @@ class MPPI_Node(Node):
         debug_terms['opponent_active'] = 1.0 if opponent_active else 0.0
         if not opponent_active:
             debug_terms['min_opponent_dist'] = -1.0
-        debug_terms['opponent_auto_mode_id'] = self.opponent_auto_debug.get('mode_id', 0.0)
         debug_terms['opponent_auto_left_clearance'] = self.opponent_auto_debug.get('left_clearance', -1.0)
         debug_terms['opponent_auto_right_clearance'] = self.opponent_auto_debug.get('right_clearance', -1.0)
         debug_terms['opponent_auto_closing_speed'] = self.opponent_auto_debug.get('closing_speed', 0.0)
@@ -1712,6 +1714,24 @@ class MPPI_Node(Node):
             msg = Float32()
             msg.data = float(debug_terms.get(key, 0.0))
             pub.publish(msg)
+
+    def publish_auto_mode_name(self):
+        """Publish the human-readable auto mode every control tick.
+
+        Lives outside publish_reward_debug because that function early-
+        returns when no float-debug topic has a subscriber — which would
+        gate the string topic too. We want the string topic to update at
+        the full control rate whenever Foxglove (or echo) is listening.
+        """
+        if self.opponent_auto_mode_name_pub.get_subscription_count() == 0:
+            return
+        if self.config.opponent_behavior_mode == 'auto':
+            name = self.auto_state  # idle | follow | pass_left | pass_right
+        else:
+            name = self.config.opponent_behavior_mode  # follow | clear | pass_left | pass_right
+        name_msg = String()
+        name_msg.data = name
+        self.opponent_auto_mode_name_pub.publish(name_msg)
 
     def pose_callback(self, pose_msg):
         """
@@ -1976,6 +1996,7 @@ class MPPI_Node(Node):
             self.opt_traj_pub.publish(arr_msg)
 
         self.publish_reward_debug(reference_traj, opponent_traj, opponent_active, opponent_age)
+        self.publish_auto_mode_name()
         self.publish_visualization(reference_traj)
 
         if self.speed_debug_pub.get_subscription_count() > 0:
