@@ -603,17 +603,6 @@ private:
       blend = 0.0;
     }
 
-    // Shape-preserving propagation. The KF's measured velocity is the
-    // anchor at step 0; for each future step we apply `blend` × the
-    // raceline reference speed's delta over that step, instead of
-    // converging the prediction toward the raceline's absolute speed.
-    // Effect: an opponent measured 1 m/s slower than the raceline stays
-    // ~1 m/s slower through braking + acceleration zones (modulo
-    // `blend`). β=0 -> pure constant-velocity from KF; β=1 -> follow
-    // raceline shape with offset preserved exactly; β=0.7 -> 70 % of
-    // the raceline's per-step change applied.
-    double prev_ref_v = interpolateTrack(pred_s).speed;
-
     for (int k = 0; k <= prediction_steps_; ++k) {
       TrackPose pose = interpolateTrack(pred_s);
       const double lateral_decay = std::exp(
@@ -622,17 +611,12 @@ private:
       pose.speed = pred_v;
       prediction.push_back(pose);
 
-      // Step forward in arc-length using the CURRENT predicted speed,
-      // then shift pred_v by blend * (raceline ref delta over that step).
-      const double next_s = pred_s + pred_v * prediction_dt_;
-      const double next_ref_v = interpolateTrack(next_s).speed;
-      const double delta_ref = next_ref_v - prev_ref_v;
-      pred_v = std::max(0.0, pred_v + blend * delta_ref);
+      const double profile_v = interpolateTrack(pred_s).speed;
+      pred_v = (1.0 - blend) * pred_v + blend * profile_v;
       if (stationary && (!stale || hold_stationary_when_stale_)) {
         pred_v = 0.0;
       }
-      pred_s = next_s;
-      prev_ref_v = next_ref_v;
+      pred_s += pred_v * prediction_dt_;
     }
 
     (void)now_sec;

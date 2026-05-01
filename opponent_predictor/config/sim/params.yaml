@@ -9,7 +9,7 @@ opponent_predictor:
     debug_topic: /opponent/debug
 
     # Relative paths are resolved from the mppi_bringup package share.
-    waypoint_path: waypoints/lev_testing/racetrack_lev_sim2.csv
+    waypoint_path: waypoints/houston_main1.csv
     waypoint_path_absolute: false
     frame_id: map
     pose_source: odom_pose

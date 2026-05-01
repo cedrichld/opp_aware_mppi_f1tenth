@@ -1,22 +1,19 @@
 opponent_lidar_detector:
   ros__parameters:
     scan_topic: /scan
-    ego_odom_topic: /ego_racecar/odom
+    ego_odom_topic: /pf/pose/odom
     map_topic: /map
     detected_odom_topic: /opponent/detection_odom
     detector_marker_topic: /opponent/detection_markers
     detector_debug_topic: /opponent/detection_debug
 
     # Relative paths are resolved from the mppi_bringup package share.
-    waypoint_path: waypoints/houston_main1.csv
+    waypoint_path: waypoints/old/lev_testing/rt_lev4_safe.csv
     waypoint_path_absolute: false
 
     frame_id: map
-    base_frame_id: ego_racecar/base_link
-    # Sim URDF mounts ego_racecar/laser_model 0.45 m ahead of base_link.
-    # LaserScan ranges are measured from the laser origin, so without this
-    # offset dynamic points appear shifted toward the ego car.
-    laser_x_offset: 0.275
+    base_frame_id: base_link
+    laser_x_offset: 0.0
     laser_y_offset: 0.0
     laser_yaw_offset: 0.0
 
