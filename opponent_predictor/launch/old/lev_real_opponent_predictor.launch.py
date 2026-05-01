@@ -30,7 +30,7 @@ def generate_launch_description():
             'predictor_params_file',
             default_value=PathJoinSubstitution([
                 FindPackageShare('opponent_predictor'),
-                'config',
+                'config', 'old',
                 'hardware',
                 'params.yaml',
             ]),
@@ -40,7 +40,7 @@ def generate_launch_description():
             'detector_params_file',
             default_value=PathJoinSubstitution([
                 FindPackageShare('opponent_predictor'),
-                'config',
+                'config', 'old',
                 'hardware',
                 'lidar_detector.yaml',
             ]),
