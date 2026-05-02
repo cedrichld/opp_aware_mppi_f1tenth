@@ -132,7 +132,7 @@ lmppi_node:
 
     # RViz visualization. Add MarkerArray displays for these topics:
     # /mppi/reference, /mppi/optimal_trajectory, /mppi/sampled_trajectories
-    publish_markers: true             # Toggle all MPPI MarkerArray visualization publishers.
+    publish_markers: false            # Race default: off. Heavy MarkerArray serialization adds ms per tick under Foxglove subscribers.
     marker_frame_id: map              # RViz frame for reference/optimal/sampled trajectory markers.
     reference_line_width: 0.06        # Blue reference trajectory line width.
     optimal_line_width: 0.08          # Green optimal rollout line width.

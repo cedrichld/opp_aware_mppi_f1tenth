@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
 from nav_msgs.msg import Odometry, Path as NavPath
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Point
@@ -83,6 +83,9 @@ class MPPI_Node(Node):
         'state_est_vy': '/mppi/debug/state_est_vy',
         'state_est_wz': '/mppi/debug/state_est_wz',
         'mppi_solve_time': '/mppi/debug/mppi_solve_time',
+        'phase_post_drive_debug': '/mppi/debug/phase_post_drive_debug',
+        'phase_visualization': '/mppi/debug/phase_visualization',
+        'phase_total': '/mppi/debug/phase_total',
         'mppi_aopt_max_abs': '/mppi/debug/mppi_aopt_max_abs',
         'mppi_saturation_count': '/mppi/debug/mppi_saturation_count',
         'mppi_bad_output_count': '/mppi/debug/mppi_bad_output_count',
@@ -180,6 +183,9 @@ class MPPI_Node(Node):
         self._stats_control_skips_no_pose = 0
         self._stats_solve_times = []
         self._stats_pose_age = 0.0
+        self._stats_phase_total_max_window = 0.0
+        self._stats_phase_debug_max_window = 0.0
+        self._stats_phase_viz_max_window = 0.0
         self._stats_guard_count_at_window_start = 0
         self._stats_soft_guard_count_at_window_start = 0
         self._stats_opponent_rx = 0
@@ -392,7 +398,7 @@ class MPPI_Node(Node):
             'min_speed': 0.0,
             'max_speed': 20.0,
             'max_steering_angle': 0.4189,
-            'publish_markers': True,
+            'publish_markers': False,    # default OFF — opt in via YAML when tuning, never the race default
             'marker_frame_id': 'map',
             'reference_line_width': 0.06,
             'optimal_line_width': 0.08,
@@ -1727,6 +1733,9 @@ class MPPI_Node(Node):
         debug_terms['state_est_vy'] = self.last_timing_debug.get('state_est_vy', 0.0)
         debug_terms['state_est_wz'] = self.last_timing_debug.get('state_est_wz', 0.0)
         debug_terms['mppi_solve_time'] = self.last_timing_debug.get('mppi_solve_time', 0.0)
+        debug_terms['phase_post_drive_debug'] = self.last_timing_debug.get('phase_post_drive_debug', 0.0)
+        debug_terms['phase_visualization'] = self.last_timing_debug.get('phase_visualization', 0.0)
+        debug_terms['phase_total'] = self.last_timing_debug.get('phase_total', 0.0)
         debug_terms['mppi_aopt_max_abs'] = self.last_timing_debug.get('mppi_aopt_max_abs', 0.0)
         debug_terms['mppi_saturation_count'] = float(self.mppi_saturation_count)
         debug_terms['mppi_bad_output_count'] = float(self.mppi_bad_output_count)
@@ -2003,11 +2012,24 @@ class MPPI_Node(Node):
         drive_msg.drive.speed = self.control[1]
         self.drive_pub.publish(drive_msg)
         self._stats_drive_tx += 1
+        # solve_dt covers everything from t1 (start of control_step) through
+        # /drive publish — i.e. the path that ACTUALLY produces a control.
         solve_dt = time.time() - t1
         self._stats_solve_times.append(solve_dt)
         if len(self._stats_solve_times) > 1024:
             # bound memory under stats_log_interval=0
             self._stats_solve_times = self._stats_solve_times[-256:]
+
+        # ---- Phase timing for post-drive work ----
+        # `solve_dt` (above) only covers the path that produces /drive. The
+        # blocks below (debug topic publish, marker viz, speed_debug) can do
+        # JAX host syncs (numpify) and significant CPU work, and they're NOT
+        # included in solve_dt. When we see "solve max=25ms" but the timer
+        # appears stalled, the time is being eaten here. Three phase scalars:
+        #   phase_post_drive_debug — reward/auto/speed-debug publishing
+        #   phase_visualization     — marker rebuild + publish
+        #   phase_total             — entire control_step end-to-end
+        post_drive_t0 = time.time()
 
         if self.reference_pub.get_subscription_count() > 0:
             ref_traj_cpu = numpify(reference_traj)
@@ -2019,10 +2041,9 @@ class MPPI_Node(Node):
             arr_msg = to_multiarray_f32(opt_traj_cpu.astype(np.float32))
             self.opt_traj_pub.publish(arr_msg)
 
+        debug_t0 = time.time()
         self.publish_reward_debug(reference_traj, opponent_traj, opponent_active, opponent_age)
         self.publish_auto_mode_name()
-        self.publish_visualization(reference_traj)
-
         if self.speed_debug_pub.get_subscription_count() > 0:
             speed_debug = np.array([
                 vx_state,
@@ -2032,6 +2053,24 @@ class MPPI_Node(Node):
                 self.config.speed_profile_drive_blend,
             ], dtype=np.float32)
             self.speed_debug_pub.publish(to_multiarray_f32(speed_debug))
+        debug_dt = time.time() - debug_t0
+
+        viz_t0 = time.time()
+        self.publish_visualization(reference_traj)
+        viz_dt = time.time() - viz_t0
+
+        total_dt = time.time() - t1
+
+        # Stash for stats_timer + per-tick debug topic.
+        self.last_timing_debug['phase_post_drive_debug'] = float(debug_dt)
+        self.last_timing_debug['phase_visualization'] = float(viz_dt)
+        self.last_timing_debug['phase_total'] = float(total_dt)
+        if total_dt > self._stats_phase_total_max_window:
+            self._stats_phase_total_max_window = total_dt
+        if debug_dt > self._stats_phase_debug_max_window:
+            self._stats_phase_debug_max_window = debug_dt
+        if viz_dt > self._stats_phase_viz_max_window:
+            self._stats_phase_viz_max_window = viz_dt
 
     def stats_timer(self):
         """Periodic, NON-buffered Hz/timing report.
@@ -2061,6 +2100,7 @@ class MPPI_Node(Node):
             "MPPI {:5.1f}Hz | pose_rx {:5.1f}Hz | drive_tx {:5.1f}Hz | "
             "ctrl_ticks {:5.1f}Hz (skip stale={} no_pose={}) | "
             "solve mean={:5.1f}ms p99={:5.1f}ms max={:5.1f}ms | "
+            "phase_total_max={:5.1f}ms (debug={:.1f} viz={:.1f}) | "
             "pose_age={:5.1f}ms | guard+={} (soft+={}) | opp_rx {:4.1f}Hz".format(
                 self._stats_drive_tx / window,
                 self._stats_pose_rx / window,
@@ -2071,6 +2111,9 @@ class MPPI_Node(Node):
                 solve_mean * 1000.0,
                 solve_p99 * 1000.0,
                 solve_max * 1000.0,
+                self._stats_phase_total_max_window * 1000.0,
+                self._stats_phase_debug_max_window * 1000.0,
+                self._stats_phase_viz_max_window * 1000.0,
                 self._stats_pose_age * 1000.0,
                 guard_delta,
                 soft_guard_delta,
@@ -2085,6 +2128,9 @@ class MPPI_Node(Node):
         self._stats_control_skips_stale = 0
         self._stats_control_skips_no_pose = 0
         self._stats_solve_times = []
+        self._stats_phase_total_max_window = 0.0
+        self._stats_phase_debug_max_window = 0.0
+        self._stats_phase_viz_max_window = 0.0
         self._stats_guard_count_at_window_start = self.mppi_guard_count
         self._stats_soft_guard_count_at_window_start = self.mppi_soft_guard_count
         self._stats_opponent_rx = 0
@@ -2095,11 +2141,25 @@ def main(args=None):
     mppi_node = MPPI_Node()
     # MultiThreadedExecutor lets the lightweight pose_callback (cache-only)
     # interleave with an in-progress MPPI solve. The solve itself releases the
-    # GIL during JAX GPU calls and during numpify(), so the cache update
-    # actually runs concurrently. With a single-threaded executor, a slow
-    # solve would block all callbacks and PF cadence variation would directly
-    # throttle the controller.
-    executor = MultiThreadedExecutor(num_threads=4)
+    # SingleThreadedExecutor is the DEFAULT after A/B testing showed
+    # MultiThreaded actively introduced soft timing gaps in sim that didn't
+    # exist in single-threaded mode. Most of MPPI's per-callback work is
+    # pure-Python (estimator, dict ops, get_params, opp logic) which holds
+    # the GIL anyway, so multiple threads = serialized by GIL + extra
+    # thread-switching overhead with no concurrency benefit. Worst case
+    # under SingleThreaded: pose_callback waits for control_step to finish
+    # (~17 ms) before running. That's bounded and predictable. Under
+    # MultiThreaded, GIL contention and stats/params/opp callbacks competing
+    # for thread slots produced unbounded jitter.
+    #
+    # Set MPPI_MULTI_THREADED=1 to opt into MultiThreadedExecutor (e.g. for
+    # comparison testing or workloads with truly GIL-releasing callbacks).
+    if os.environ.get("MPPI_MULTI_THREADED", "").lower() in ("1", "true", "yes"):
+        executor = MultiThreadedExecutor(num_threads=4)
+        mppi_node.get_logger().info("Using MultiThreadedExecutor(num_threads=4)")
+    else:
+        executor = SingleThreadedExecutor()
+        mppi_node.get_logger().info("Using SingleThreadedExecutor (default)")
     executor.add_node(mppi_node)
     try:
         executor.spin()
