@@ -310,6 +310,18 @@ class MPPI_Node(Node):
         # callback group keeps it off the control hot path.
         self.params_refresh_timer = self.create_timer(0.5, self.get_params)
 
+        # Low-rate ego-pose RELAY for the opponent detector. The detector
+        # used to subscribe to /pf/pose/odom directly, which forced PF's
+        # publisher to do +1 subscriber's work per publish — observed to
+        # drop MPPI-side pose_rx from 50 Hz to ~5 Hz when opp launched.
+        # Republishing the cached pose at 10 Hz from MPPI (which is already
+        # the authoritative subscriber) means the detector subscribes to
+        # MPPI's relay instead of PF, removing the load on PF.
+        self.ego_relay_pub = self.create_publisher(
+            Odometry, "/mppi/ego_odom_for_opp", sensor_qos,
+        )
+        self.ego_relay_timer = self.create_timer(0.1, self._publish_ego_relay)
+
         # Stop Python gen-2 garbage collection from firing during a race.
         # JAX's compile cache + traced objects make the gen-2 sweep walk a
         # large heap; the walk itself is O(heap size) and takes 300-500 ms
@@ -1777,6 +1789,19 @@ class MPPI_Node(Node):
         self.latest_pose_msg = pose_msg
         self.latest_pose_recv_time = time.time()
         self._stats_pose_rx += 1
+
+    def _publish_ego_relay(self):
+        """Republish the cached ego odom at the relay timer rate (10 Hz).
+
+        The opponent detector subscribes here instead of /pf/pose/odom so
+        PF's publisher doesn't pay the cost of an extra 50 Hz subscriber.
+        Skip publish if no subscriber is listening (saves serialization).
+        """
+        if self.latest_pose_msg is None:
+            return
+        if self.ego_relay_pub.get_subscription_count() == 0:
+            return
+        self.ego_relay_pub.publish(self.latest_pose_msg)
 
     def control_timer(self):
         """Fixed-rate driver of the MPPI solve.

@@ -1,7 +1,12 @@
 opponent_lidar_detector:
   ros__parameters:
     scan_topic: /scan
-    ego_odom_topic: /pf/pose/odom
+    # Subscribe to MPPI's ego relay (10 Hz) instead of /pf/pose/odom
+    # directly. Removes a 50 Hz subscriber from PF's publisher — was
+    # causing pose_rx at MPPI to drop to 5-10 Hz when opp launched.
+    # Detector only needs ego pose at scan rate (~3.75 Hz with throttle),
+    # so 10 Hz relay is plenty.
+    ego_odom_topic: /mppi/ego_odom_for_opp
     map_topic: /map
     detected_odom_topic: /opponent/detection_odom
     detector_marker_topic: /opponent/detection_markers
