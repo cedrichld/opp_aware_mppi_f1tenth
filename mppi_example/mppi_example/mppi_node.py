@@ -538,7 +538,7 @@ class MPPI_Node(Node):
             'live_tuning_enabled': False,
             # /scan-based static-obstacle safety brake. Tuned for F1TENTH
             # body geometry. Disable by setting scan_safety_enabled=false.
-            'scan_safety_enabled': True,
+            'scan_safety_enabled': False,
             'scan_safety_cone_half_rad': 0.45,    # ±~26° from forward = the "what's directly in front of me" cone
             'scan_safety_brake_dist': 0.6,        # below this clearance, command speed = scan_safety_min_speed
             'scan_safety_warn_dist': 2.0,         # above this clearance, no cap. Linear ramp between brake and warn.
