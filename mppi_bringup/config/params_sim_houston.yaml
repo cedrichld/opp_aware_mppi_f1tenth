@@ -5,7 +5,7 @@ lmppi_node:
     #   use_pose_delta_state_estimate: false  -> sim odom twist is clean
     # Everything else mirrors hardware so timing-gap behavior is comparable.
 
-    is_sim: true                  # true: /ego_racecar/odom; false: /pf/pose/odom.
+    is_sim: false                  # true: /ego_racecar/odom; false: /pf/pose/odom.
     state_predictor: dynamic_ST
     n_samples: 2048
     n_steps: 8
@@ -14,7 +14,7 @@ lmppi_node:
     render: false                 # debug-disabled mode for timing-gap diagnosis
 
     # timer
-    control_loop_hz: 30.0
+    control_loop_hz: 40.0
 
     # Control trigger architecture (NEW). 'odom_gate': pose_callback rate-
     # gates and dispatches control_step (~30 Hz from a 50 Hz pose source),
@@ -24,7 +24,7 @@ lmppi_node:
     # control_watchdog_max_silence_sec. 'timer' is the legacy fixed-rate
     # behavior (one-flag rollback). control_trigger_mode is read-only at
     # startup; restart node to switch.
-    control_trigger_mode: odom_gate              # 'odom_gate' | 'timer'
+    control_trigger_mode: timer              # 'odom_gate' | 'timer'
     control_watchdog_hz: 5.0                     # watchdog timer rate in odom_gate mode
     control_watchdog_max_silence_sec: 0.10       # fire watchdog if pose-driven hasn't run in this long
 
@@ -152,7 +152,7 @@ lmppi_node:
     # Visualization OFF — this profile is the "no debug" leg of the A/B
     # diagnostic. To re-enable for visual debugging, flip publish_markers
     # to true and bump sampled_trajectory_count.
-    publish_markers: true
+    publish_markers: false
     marker_frame_id: map
     reference_line_width: 0.06
     optimal_line_width: 0.08
