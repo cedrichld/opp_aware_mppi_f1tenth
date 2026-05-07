@@ -25,7 +25,7 @@ CUDANUM = 0
 # Jetson hang we saw mid-race-1 (likely OOM/fragmentation/brownout — this
 # fixes the OOM/fragmentation surface).
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.40"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.45"
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDANUM)
 
 class InferEnv():
