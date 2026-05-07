@@ -34,7 +34,7 @@ def generate_launch_description():
     )
 
     pkg_share = get_package_share_directory('mppi_bringup')
-    csv_path = os.path.join(pkg_share, 'waypoints', 'old', 'lev2fl', 'lev2_1.csv')
+    csv_path = os.path.join(pkg_share, 'waypoints', 'old', 'lev2fl.csv')
 
     mppi_node = Node(
         package='mppi_example',
@@ -68,7 +68,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
                 'maps',
-                'levine.yaml',
+                'lev_hall_lap1.yaml',
             ]),
             description='Static map yaml used to build the wall-distance cost field',
         ),
