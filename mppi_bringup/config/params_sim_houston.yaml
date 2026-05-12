@@ -7,7 +7,7 @@ lmppi_node:
 
     is_sim: false                  # true: /ego_racecar/odom; false: /pf/pose/odom.
     state_predictor: dynamic_ST
-    n_samples: 2048
+    n_samples: 8192
     n_steps: 8
     sim_time_step: 0.1
     random_seed: 527787
@@ -36,11 +36,11 @@ lmppi_node:
 
 
     # Live tuning parameters
-    temperature: 0.01
+    temperature: 0.02
     init_vel: 2.1
     startup_speed: 1.0
     use_pose_delta_state_estimate: false   # sim has clean twist
-    friction: 0.5
+    friction: 0.41
 
     use_waypoint_speed_profile: true
     speed_profile_scale: 1.2
@@ -52,7 +52,7 @@ lmppi_node:
     use_speed_profile_drive_speed: false
     speed_profile_drive_lookahead_steps: 0
 
-    control_sample_std_steer: 0.8
+    control_sample_std_steer: 2.0
     control_sample_std_accel: 10.0
     steer_vel_scale: 3.0
     accel_scale: 4.0
@@ -64,7 +64,7 @@ lmppi_node:
     velocity_reward_weight: 0.15
     yaw_reward_weight: 0.01
 
-    wall_cost_enabled: false
+    wall_cost_enabled: true
     wall_cost_weight: 20.0
     wall_cost_margin: 0.4
     wall_cost_power: 0.6
@@ -72,12 +72,12 @@ lmppi_node:
 
     opponent_path_topic: /opponent/predicted_path
     opponent_cost_enabled: true
-    opponent_cost_weight: 100.0
-    opponent_cost_radius: 0.6
-    opponent_cost_power: 2.0
+    opponent_cost_weight: 40.0
+    opponent_cost_radius: 0.5
+    opponent_cost_power: 0.4
     opponent_cost_discount: 1.0
     opponent_path_timeout: 0.5
-    opponent_behavior_mode: clear
+    opponent_behavior_mode: auto
     opponent_follow_weight: 8.0
     opponent_follow_distance: 1.2
     opponent_same_lane_width: 0.7
