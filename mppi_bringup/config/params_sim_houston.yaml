@@ -11,7 +11,7 @@ lmppi_node:
     n_steps: 8
     sim_time_step: 0.1
     random_seed: 527787
-    render: false                 # debug-disabled mode for timing-gap diagnosis
+    render: true                 # debug-disabled mode for timing-gap diagnosis
 
     # timer
     control_loop_hz: 40.0
@@ -24,7 +24,7 @@ lmppi_node:
     # control_watchdog_max_silence_sec. 'timer' is the legacy fixed-rate
     # behavior (one-flag rollback). control_trigger_mode is read-only at
     # startup; restart node to switch.
-    control_trigger_mode: timer              # 'odom_gate' | 'timer'
+    control_trigger_mode: odom_gate              # 'odom_gate' | 'timer'
     control_watchdog_hz: 5.0                     # watchdog timer rate in odom_gate mode
     control_watchdog_max_silence_sec: 0.10       # fire watchdog if pose-driven hasn't run in this long
 
@@ -32,7 +32,7 @@ lmppi_node:
     # only reads a single bool per tick (essentially free) instead of
     # ~100 params. Flip true via `ros2 param set lmppi_node live_tuning_enabled true`
     # for tuning sessions; flip back to false before racing.
-    live_tuning_enabled: false
+    live_tuning_enabled: true
 
 
     # Live tuning parameters
@@ -65,9 +65,9 @@ lmppi_node:
     yaw_reward_weight: 0.01
 
     wall_cost_enabled: false
-    wall_cost_weight: 30.0
-    wall_cost_margin: 0.13
-    wall_cost_power: 0.5
+    wall_cost_weight: 20.0
+    wall_cost_margin: 0.4
+    wall_cost_power: 0.6
     wall_cost_map_yaml: '' # injected by launch
 
     opponent_path_topic: /opponent/predicted_path
@@ -115,33 +115,6 @@ lmppi_node:
     state_est_hiccup_dt: 0.06
     state_est_hiccup_prior_scale: 0.35
 
-    # /scan-based forward-cone speed cap. Reactive backstop for static
-    # obstacles (independent of any opp detection). Race default OFF —
-    # appeared to add tick latency in the last test (might also have been
-    # the low battery / lidar PLL drift). Flip to true via
-    # `ros2 param set` if you want it active without restarting.
-    scan_safety_enabled: false
-    scan_safety_cone_half_rad: 0.45    # ±~26° forward cone
-    scan_safety_brake_dist: 0.6        # below this clearance, cap = scan_safety_min_speed
-    scan_safety_warn_dist: 2.0         # above this clearance, no cap
-    scan_safety_min_speed: 0.5         # m/s when fully braked. 0 = full stop.
-    scan_safety_min_range: 0.10        # ignore returns closer than this
-
-    # In-process opponent detector (writes opponent_xy_horizon directly,
-    # bypasses the standalone opp launch). Race default OFF — opponent
-    # cost machinery below stays armed but is fed nothing, so it does
-    # nothing unless inproc is flipped on or the network detector
-    # publishes. Do NOT enable both inproc and the standalone opp launch
-    # at the same time (last-writer-wins on opponent_xy_horizon).
-    inproc_opp_enabled: false
-    inproc_opp_max_range: 5.0          # m
-    inproc_opp_min_range: 0.30         # m
-    inproc_opp_cone_half_rad: 1.05     # ~60° forward half-cone
-    inproc_opp_min_cluster_pts: 4      # min consecutive beams to call it an obstacle
-    inproc_opp_max_cluster_width: 1.20 # m, drops walls
-    inproc_opp_wall_skip_dist: 0.25    # m, SDF filter; 0 disables
-    inproc_opp_min_run_interval_sec: 0.08  # ~12 Hz throttle
-
     ######################################################
     ###################### BACKEND #######################
     ######################################################
@@ -152,7 +125,7 @@ lmppi_node:
     # Visualization OFF — this profile is the "no debug" leg of the A/B
     # diagnostic. To re-enable for visual debugging, flip publish_markers
     # to true and bump sampled_trajectory_count.
-    publish_markers: false
+    publish_markers: true
     marker_frame_id: map
     reference_line_width: 0.06
     optimal_line_width: 0.08

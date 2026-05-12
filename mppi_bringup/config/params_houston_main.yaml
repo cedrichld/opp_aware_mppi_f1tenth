@@ -81,9 +81,9 @@ lmppi_node:
     yaw_reward_weight: 0.01             # Penalizes heading mismatch; helps avoid sideways path matches.
 
     wall_cost_enabled: false
-    wall_cost_weight: 50.0
-    wall_cost_margin: 0.15
-    wall_cost_power: 0.4
+    wall_cost_weight: 20.0
+    wall_cost_margin: 0.4
+    wall_cost_power: 0.6
     wall_cost_map_yaml: '' #injected by launch
 
     # Opponent-aware MPPI cost. Keep disabled until /opponent/predicted_path
@@ -138,33 +138,6 @@ lmppi_node:
     state_est_wz_prior: 0.4
     state_est_hiccup_dt: 0.06
     state_est_hiccup_prior_scale: 0.35
-
-    # /scan-based forward-cone speed cap. Reactive backstop for static
-    # obstacles (independent of any opp detection). Race default OFF —
-    # appeared to add tick latency in the last test (might also have been
-    # the low battery / lidar PLL drift). Flip to true via
-    # `ros2 param set` if you want it active without restarting.
-    scan_safety_enabled: false
-    scan_safety_cone_half_rad: 0.45    # ±~26° forward cone
-    scan_safety_brake_dist: 0.6        # below this clearance, cap = scan_safety_min_speed
-    scan_safety_warn_dist: 2.0         # above this clearance, no cap
-    scan_safety_min_speed: 0.5         # m/s when fully braked. 0 = full stop.
-    scan_safety_min_range: 0.10        # ignore returns closer than this
-
-    # In-process opponent detector (writes opponent_xy_horizon directly,
-    # bypasses the standalone opp launch). Race default OFF — opponent
-    # cost machinery below stays armed but is fed nothing, so it does
-    # nothing unless inproc is flipped on or the network detector
-    # publishes. Do NOT enable both inproc and the standalone opp launch
-    # at the same time (last-writer-wins on opponent_xy_horizon).
-    inproc_opp_enabled: true
-    inproc_opp_max_range: 5.0          # m
-    inproc_opp_min_range: 0.30         # m
-    inproc_opp_cone_half_rad: 1.05     # ~60° forward half-cone
-    inproc_opp_min_cluster_pts: 4      # min consecutive beams to call it an obstacle
-    inproc_opp_max_cluster_width: 1.20 # m, drops walls
-    inproc_opp_wall_skip_dist: 0.25    # m, SDF filter; 0 disables
-    inproc_opp_min_run_interval_sec: 0.08  # ~12 Hz throttle
 
 
     ######################################################

@@ -12,7 +12,6 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
 from nav_msgs.msg import Odometry, Path as NavPath
-from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Point
 from std_msgs.msg import Float32, Float32MultiArray, String
@@ -146,8 +145,6 @@ class MPPI_Node(Node):
         # opponent_pass_clearance will use at runtime. Without this, the
         # first auto-pass evaluation during the race triggers a one-shot
         # ~75-150 ms XLA compile that manifests as a SOFT timing gap
-        # right when an opponent first appears in front of the car —
-        # exactly when continuity matters most.
         try:
             n_probes = max(1, int(getattr(self.config, 'opponent_auto_check_steps', 3)))
             if getattr(self.infer_env, 'wall_sdf', None) is not None:
@@ -172,13 +169,14 @@ class MPPI_Node(Node):
         self.last_control_step_wall_time = None
         # Odom-gate trigger state. _next_control_fire_time uses the
         # next-fire-time amortization scheme so that with PF at 50 Hz and
-        # control_loop_hz=30, we get ~30 Hz effective on average (mix of
+        # control_loop_hz=40, we get ~40 Hz effective on average (mix of
         # 20 ms / 40 ms gaps that average to 33 ms) instead of always
         # quantizing to 25 Hz. Floor against `now + period/2` prevents
         # catchup-cascade if we ever fall far behind.
         self._next_control_fire_time = 0.0
         self._last_control_step_start_time = 0.0
         self._last_ego_relay_pub_time = 0.0
+        self._last_viz_pub_time = 0.0
         self._last_get_params_dt = 0.0
         self._stats_control_trigger_odom = 0
         self._stats_control_trigger_watchdog = 0
@@ -225,10 +223,8 @@ class MPPI_Node(Node):
             'closing_speed': 0.0,
             'pass_allowed': 0.0,
         }
-        # Auto-overtake state machine. Stateless re-evaluation every callback
-        # caused mode flicker at boundary conditions (closing speed dipping
-        # near min, clearance crossing threshold mid-pass). Track which side
-        # we committed to and when, so a brief dip doesn't abort the pass.
+        # Auto-overtake state machine
+        # Track which side we committed to and when, so brief dip doesn't abort pass
         self.auto_state = 'idle'           # idle | follow | pass_left | pass_right
         self.auto_state_entered_at = None  # wall time the current state was entered
         self.auto_last_abort_at = None     # wall time of the last pass abort (for cooldown)
@@ -247,6 +243,12 @@ class MPPI_Node(Node):
             reliability=rclpy.qos.QoSReliabilityPolicy.BEST_EFFORT,
             durability=rclpy.qos.QoSDurabilityPolicy.VOLATILE,
         )
+        # BEST_EFFORT for debug/marker topics so a slow / SSH-tunneled
+        # subscriber (Foxglove, RViz remote) cannot backpressure the
+        # publisher — messages drop instead of blocking control_step.
+        # Subscribers must also be BEST_EFFORT to connect; RViz exposes
+        # a per-display QoS setting, Foxglove's bridge is usually fine.
+        # /drive intentionally stays RELIABLE — VESC needs every command.
         debug_qos = rclpy.qos.QoSProfile(
             history=rclpy.qos.QoSHistoryPolicy.KEEP_LAST,
             depth=1,
@@ -254,7 +256,7 @@ class MPPI_Node(Node):
             durability=rclpy.qos.QoSDurabilityPolicy.VOLATILE,
         )
         # Reentrant group so pose_callback (cache-only) and control_timer
-        # (the solve) can run concurrently under the MultiThreadedExecutor.
+        # (the solve) can run concurrently under optional MultiThreadedExecutor
         # opponent_path_callback joins the same group; it touches independent
         # state. Service + stats_timer stay in the default group.
         self._control_group = ReentrantCallbackGroup()
@@ -275,19 +277,6 @@ class MPPI_Node(Node):
             self.opponent_path_callback,
             sensor_qos,
             callback_group=self._control_group,
-        )
-        # In-process /scan safety check. Caches the latest scan; control_step
-        # uses it to find the min range in a forward cone and CAP /drive.speed
-        # accordingly. This is the lightweight "don't drive into a static
-        # obstacle that's not in the static map" backup when the opp pipeline
-        # isn't running. NOT a planner — just a safety brake.
-        self.latest_scan = None
-        self._scan_angles_cache = None
-        self._scan_angles_cache_step = 0.0
-        self._scan_angles_cache_min = 0.0
-        self.scan_sub = self.create_subscription(
-            LaserScan, '/scan', self.scan_callback,
-            sensor_qos, callback_group=self._control_group,
         )
         # publishers
         self.drive_pub = self.create_publisher(AckermannDriveStamped, "/drive", qos)
@@ -314,7 +303,7 @@ class MPPI_Node(Node):
         # Control loop timer. Behavior depends on control_trigger_mode:
         #   - 'odom_gate' (default): timer is a low-rate WATCHDOG only.
         #     pose_callback rate-gates and dispatches control_step itself,
-        #     which is the actual ~30 Hz control source. Watchdog only
+        #     which is the actual ~50 Hz control source. Watchdog only
         #     fires if pose-driven dispatch hasn't run in
         #     control_watchdog_max_silence_sec (PF degradation).
         #   - 'timer' (legacy fallback): timer at control_loop_hz drives
@@ -458,7 +447,7 @@ class MPPI_Node(Node):
             'wall_cost_enabled': False,
             'wall_cost_weight': 0.0,
             'wall_cost_margin': 0.3,
-            'wall_cost_power': 2.0,
+            'wall_cost_power': 0.01,
             'wall_cost_map_yaml': '',
             'opponent_path_topic': '/opponent/predicted_path',
             'opponent_cost_enabled': False,
@@ -536,34 +525,14 @@ class MPPI_Node(Node):
             # Removes get_params() as a head-of-line block source codex
             # flagged. Keep off in races, flip on for tuning sessions.
             'live_tuning_enabled': False,
-            # /scan-based static-obstacle safety brake. Tuned for F1TENTH
-            # body geometry. Disable by setting scan_safety_enabled=false.
-            'scan_safety_enabled': False,
-            'scan_safety_cone_half_rad': 0.45,    # ±~26° from forward = the "what's directly in front of me" cone
-            'scan_safety_brake_dist': 0.6,        # below this clearance, command speed = scan_safety_min_speed
-            'scan_safety_warn_dist': 2.0,         # above this clearance, no cap. Linear ramp between brake and warn.
-            'scan_safety_min_speed': 0.5,         # m/s — speed when very close. Set 0 to fully stop.
-            'scan_safety_min_range': 0.10,        # ignore returns closer than this (laser noise / self-returns)
-
-            # In-process opponent detector. Race-day fallback when running
-            # the standalone opp launch caused SICK/PF contention on a
-            # shared core. When enabled, the closest forward cluster of
-            # /scan returns (filtered against the wall SDF when loaded) is
-            # written into the same opponent_xy_horizon buffer the network
-            # detector would have populated, so the existing opponent_cost
-            # machinery just works. Pair with opponent_cost_enabled=true
-            # and opponent_behavior_mode='clear' (radial repulsion only,
-            # no follow / pass state machine). Do NOT enable while the
-            # standalone opp launch is also publishing — they would
-            # race-write the same horizon buffer.
-            'inproc_opp_enabled': False,
-            'inproc_opp_max_range': 5.0,           # m — ignore returns farther than this
-            'inproc_opp_min_range': 0.30,          # m — ignore returns closer than this (self-returns / sensor edge)
-            'inproc_opp_cone_half_rad': 1.05,      # ~60° forward half-cone
-            'inproc_opp_min_cluster_pts': 4,       # minimum beams in a contiguous cluster to call it an obstacle
-            'inproc_opp_max_cluster_width': 1.20,  # m — drop clusters wider than this (likely a wall, not a car)
-            'inproc_opp_wall_skip_dist': 0.25,     # m — skip scan returns within this of a known wall (SDF)
-            'inproc_opp_min_run_interval_sec': 0.08,  # throttle: detect at most ~12 Hz regardless of scan rate
+            # Cap rate for ALL debug/marker topic publishing in
+            # control_step (reference_arr, opt_traj_arr, reward_debug,
+            # speed_debug, visualization markers). Gate works even when
+            # subscribers are present, so a Foxglove/RViz client over a
+            # slow link can't make MPPI burn CPU/serialization time on
+            # every solve. Default 5 Hz = enough for human eyes; control
+            # still solves at full rate.
+            'viz_publish_rate_hz': 5.0,
         }
         for key, value in defaults.items():
             if not hasattr(self.config, key):
@@ -728,7 +697,7 @@ class MPPI_Node(Node):
         declf('wall_cost_margin', self.config.wall_cost_margin,
               fdesc('Distance below which wall cost activates (m).', 0.0, 1.5, 0.01))
         declf('wall_cost_power', self.config.wall_cost_power,
-              fdesc('Wall cost exponent.', 0.1, 5.0, 0.1))
+              fdesc('Wall cost exponent.', 0.0, 5.0, 0.01))
         decls('wall_cost_map_yaml', self.config.wall_cost_map_yaml,
               desc('[startup] Map YAML for wall SDF (injected by launch).', read_only=True))
 
@@ -879,40 +848,16 @@ class MPPI_Node(Node):
         declb('live_tuning_enabled', self.config.live_tuning_enabled,
               desc('Enable live parameter refresh (~100 reads at 2 Hz). Off by default to avoid '
                    'head-of-line blocking. Flip on via `ros2 param set` for tuning sessions.'))
+        declf('viz_publish_rate_hz', self.config.viz_publish_rate_hz,
+              fdesc('Cap rate for debug/marker topic publishing in control_step. Limits per-solve '
+                    'serialization work AND subscriber load over slow links (Foxglove/SSH). Set to '
+                    '0 to disable all debug pubs entirely; default 5 is plenty for human viz.',
+                    0.0, 100.0, 0.5))
         declf('control_pose_stale_sec', self.config.control_pose_stale_sec,
               fdesc('Skip MPPI solve if cached pose age exceeds this (sec).', 0.05, 1.0, 0.01))
         declf('stats_log_interval_sec', self.config.stats_log_interval_sec,
               fdesc('Periodic stats logger interval (sec). 0 disables.', 0.0, 60.0, 0.5))
-        declb('scan_safety_enabled', self.config.scan_safety_enabled,
-              desc('In-process /scan-based forward-cone speed cap (static-obstacle backstop).'))
-        declf('scan_safety_cone_half_rad', self.config.scan_safety_cone_half_rad,
-              fdesc('Forward cone half-angle for scan safety (rad).', 0.05, 1.5, 0.01))
-        declf('scan_safety_brake_dist', self.config.scan_safety_brake_dist,
-              fdesc('Below this forward clearance, cap speed at scan_safety_min_speed (m).', 0.05, 5.0, 0.05))
-        declf('scan_safety_warn_dist', self.config.scan_safety_warn_dist,
-              fdesc('Above this forward clearance, no cap. Linear ramp brake..warn (m).', 0.1, 10.0, 0.05))
-        declf('scan_safety_min_speed', self.config.scan_safety_min_speed,
-              fdesc('Speed cap when fully braked by scan safety (m/s). 0 = full stop.', 0.0, 5.0, 0.05))
-        declf('scan_safety_min_range', self.config.scan_safety_min_range,
-              fdesc('Ignore /scan returns closer than this (m).', 0.0, 1.0, 0.01))
 
-        declb('inproc_opp_enabled', self.config.inproc_opp_enabled,
-              desc('In-process opponent detector from /scan; writes opponent_xy_horizon directly.'))
-        declf('inproc_opp_max_range', self.config.inproc_opp_max_range,
-              fdesc('Max /scan range to consider for in-process opp detection (m).', 0.5, 12.0, 0.05))
-        declf('inproc_opp_min_range', self.config.inproc_opp_min_range,
-              fdesc('Min /scan range to consider for in-process opp detection (m).', 0.0, 2.0, 0.01))
-        declf('inproc_opp_cone_half_rad', self.config.inproc_opp_cone_half_rad,
-              fdesc('Forward half-cone for in-process opp detection (rad).', 0.05, 1.57, 0.01))
-        decli('inproc_opp_min_cluster_pts', self.config.inproc_opp_min_cluster_pts,
-              idesc('Min consecutive beams in a candidate opp cluster.', 1, 64))
-        declf('inproc_opp_max_cluster_width', self.config.inproc_opp_max_cluster_width,
-              fdesc('Reject candidate clusters wider than this (m, bbox diag).', 0.1, 5.0, 0.05))
-        declf('inproc_opp_wall_skip_dist', self.config.inproc_opp_wall_skip_dist,
-              fdesc('Skip /scan returns within this distance of a known wall (m). 0 disables SDF filter.',
-                    0.0, 2.0, 0.01))
-        declf('inproc_opp_min_run_interval_sec', self.config.inproc_opp_min_run_interval_sec,
-              fdesc('Throttle for in-process opp detection (sec between runs).', 0.0, 1.0, 0.01))
 
     def get_params(self, startup=False):
         if startup:
@@ -964,7 +909,7 @@ class MPPI_Node(Node):
             float(self.get_parameter('wall_cost_margin').value),
         )
         self.config.wall_cost_power = max(
-            0.1,
+            -5.0,
             float(self.get_parameter('wall_cost_power').value),
         )
         self.config.opponent_cost_enabled = bool(self.get_parameter('opponent_cost_enabled').value)
@@ -1247,47 +1192,9 @@ class MPPI_Node(Node):
         self.config.stats_log_interval_sec = max(
             0.0, float(self.get_parameter('stats_log_interval_sec').value),
         )
-        self.config.scan_safety_enabled = bool(self.get_parameter('scan_safety_enabled').value)
-        self.config.scan_safety_cone_half_rad = max(
-            0.0, float(self.get_parameter('scan_safety_cone_half_rad').value),
+        self.config.viz_publish_rate_hz = max(
+            0.0, float(self.get_parameter('viz_publish_rate_hz').value),
         )
-        self.config.scan_safety_brake_dist = max(
-            0.0, float(self.get_parameter('scan_safety_brake_dist').value),
-        )
-        self.config.scan_safety_warn_dist = max(
-            self.config.scan_safety_brake_dist + 1e-3,
-            float(self.get_parameter('scan_safety_warn_dist').value),
-        )
-        self.config.scan_safety_min_speed = max(
-            0.0, float(self.get_parameter('scan_safety_min_speed').value),
-        )
-        self.config.scan_safety_min_range = max(
-            0.0, float(self.get_parameter('scan_safety_min_range').value),
-        )
-
-        self.config.inproc_opp_enabled = bool(self.get_parameter('inproc_opp_enabled').value)
-        self.config.inproc_opp_max_range = max(
-            0.0, float(self.get_parameter('inproc_opp_max_range').value),
-        )
-        self.config.inproc_opp_min_range = max(
-            0.0, float(self.get_parameter('inproc_opp_min_range').value),
-        )
-        self.config.inproc_opp_cone_half_rad = max(
-            0.0, float(self.get_parameter('inproc_opp_cone_half_rad').value),
-        )
-        self.config.inproc_opp_min_cluster_pts = max(
-            1, int(self.get_parameter('inproc_opp_min_cluster_pts').value),
-        )
-        self.config.inproc_opp_max_cluster_width = max(
-            0.0, float(self.get_parameter('inproc_opp_max_cluster_width').value),
-        )
-        self.config.inproc_opp_wall_skip_dist = max(
-            0.0, float(self.get_parameter('inproc_opp_wall_skip_dist').value),
-        )
-        self.config.inproc_opp_min_run_interval_sec = max(
-            0.0, float(self.get_parameter('inproc_opp_min_run_interval_sec').value),
-        )
-
         if hasattr(self, 'infer_env'):
             self.infer_env.config = self.config
             self.infer_env.norm_params = self.config.norm_params
@@ -1328,212 +1235,6 @@ class MPPI_Node(Node):
 
     def now_sec(self):
         return float(self.get_clock().now().nanoseconds) * 1e-9
-
-    def scan_callback(self, msg):
-        """Cache the latest LaserScan for the in-process safety brake.
-
-        Tiny callback (just stores the msg ref) — analysis is done lazily
-        in control_step so that scan-rate changes don't add per-scan
-        compute work to MPPI's executor.
-        """
-        self.latest_scan = msg
-        # One-time: pre-warm sample_wall_distance with the FULL-scan shape
-        # used by _inproc_opp_detect_step so the first detection doesn't
-        # eat a JAX compile spike during driving (~75-150 ms), independent
-        # of whether inproc_opp_enabled is set at startup. The startup
-        # stop_drive window absorbs the cost. The (n_probes, 2) pre-warm
-        # in __init__ only covers opponent_pass_clearance.
-        if not getattr(self, '_inproc_opp_sdf_warmed', False):
-            self._inproc_opp_sdf_warmed = True
-            try:
-                if getattr(self.infer_env, 'wall_sdf', None) is not None:
-                    n = len(msg.ranges)
-                    if n > 0:
-                        self.infer_env.sample_wall_distance(
-                            jnp.zeros((n, 2), dtype=jnp.float32))
-            except Exception as exc:  # noqa: BLE001 — pre-warm best-effort
-                self.get_logger().warn(
-                    f"inproc_opp full-scan SDF pre-warm skipped: {exc}")
-        # Cheap (≤2 ms), throttled to ~12 Hz, gated by inproc_opp_enabled.
-        if self.config.inproc_opp_enabled:
-            self._inproc_opp_detect_step()
-
-    def _scan_safety_speed_cap(self):
-        """Look at the latest cached /scan and return a speed cap (m/s),
-        or None if no cap should be applied.
-
-        Cone: forward arc of half-width `scan_safety_cone_half_rad` around
-        angle 0 (LiDAR forward). Find min range in that cone, then linearly
-        ramp the cap between brake_dist (cap=min_speed) and warn_dist (no cap).
-        """
-        if not self.config.scan_safety_enabled:
-            return None
-        scan = self.latest_scan
-        if scan is None:
-            return None
-        ranges = np.asarray(scan.ranges, dtype=np.float32)
-        if ranges.size == 0:
-            return None
-        n = ranges.size
-        # Build angles only once per scan size (cached on the node).
-        if (getattr(self, '_scan_angles_cache', None) is None
-                or self._scan_angles_cache.size != n
-                or self._scan_angles_cache_step != scan.angle_increment
-                or self._scan_angles_cache_min != scan.angle_min):
-            self._scan_angles_cache = (
-                scan.angle_min + np.arange(n, dtype=np.float32) * scan.angle_increment
-            )
-            self._scan_angles_cache_step = scan.angle_increment
-            self._scan_angles_cache_min = scan.angle_min
-        angles = self._scan_angles_cache
-        # Forward cone: |angle| <= cone_half. Body-frame x-forward.
-        cone_mask = np.abs(angles) <= self.config.scan_safety_cone_half_rad
-        finite_mask = np.isfinite(ranges) & (ranges > self.config.scan_safety_min_range)
-        valid = cone_mask & finite_mask
-        if not np.any(valid):
-            return None
-        forward_clearance = float(ranges[valid].min())
-        brake = float(self.config.scan_safety_brake_dist)
-        warn = float(self.config.scan_safety_warn_dist)
-        if forward_clearance >= warn:
-            return None
-        if forward_clearance <= brake:
-            return float(self.config.scan_safety_min_speed)
-        # Linear ramp brake (=min_speed) ... warn (=no cap signal). We need
-        # to know the speed AT warn — set it to the configured max_speed so
-        # the ramp is well-defined. Practically the ramp interpolates
-        # between min_speed and max_speed.
-        ramp = (forward_clearance - brake) / max(1e-6, warn - brake)
-        max_speed = float(self.config.max_speed)
-        cap = self.config.scan_safety_min_speed + ramp * (max_speed - self.config.scan_safety_min_speed)
-        return float(cap)
-
-    def _inproc_opp_detect_step(self):
-        """Find the closest forward dynamic-ish cluster in the latest /scan
-        and write it into opponent_xy_horizon as a static N-step horizon.
-
-        Pipeline (all numpy except the SDF lookup):
-          1. Build per-beam (range, angle) from cached scan; reuse the
-             angle cache populated by _scan_safety_speed_cap.
-          2. Forward-cone + range filter.
-          3. Convert valid points to map frame using the latest cached pose.
-          4. (Optional) drop returns within wall_skip_dist of a known wall
-             via infer_env.sample_wall_distance — the only JAX call. Always
-             called on the FULL fixed-shape scan to keep the JAX trace cache
-             hot (variable shapes would force recompiles per call, which is
-             what bit `opponent_pass_clearance` historically — see its
-             docstring).
-          5. Cluster surviving beams by consecutive scan-index runs (single-
-             beam gaps tolerated).
-          6. Pick the cluster with the closest centroid to ego that fits the
-             min-points / max-width gates.
-          7. Write N copies of its centroid into opponent_xy_horizon and
-             stamp opponent_path_time so get_opponent_horizon() picks it up
-             with no other code changes.
-        """
-        scan = self.latest_scan
-        pose_msg = self.latest_pose_msg
-        if scan is None or pose_msg is None:
-            return
-
-        now = self.now_sec()
-        last = getattr(self, '_inproc_opp_last_run', 0.0)
-        if now - last < self.config.inproc_opp_min_run_interval_sec:
-            return
-        self._inproc_opp_last_run = now
-
-        ranges = np.asarray(scan.ranges, dtype=np.float32)
-        if ranges.size == 0:
-            return
-        n = ranges.size
-
-        # Reuse / populate angle cache (shared with _scan_safety_speed_cap).
-        if (getattr(self, '_scan_angles_cache', None) is None
-                or self._scan_angles_cache.size != n
-                or self._scan_angles_cache_step != scan.angle_increment
-                or self._scan_angles_cache_min != scan.angle_min):
-            self._scan_angles_cache = (
-                scan.angle_min + np.arange(n, dtype=np.float32) * scan.angle_increment
-            )
-            self._scan_angles_cache_step = scan.angle_increment
-            self._scan_angles_cache_min = scan.angle_min
-        angles = self._scan_angles_cache
-
-        half = float(self.config.inproc_opp_cone_half_rad)
-        rmin = float(self.config.inproc_opp_min_range)
-        rmax = float(self.config.inproc_opp_max_range)
-        finite = np.isfinite(ranges)
-        valid = finite & (np.abs(angles) <= half) & (ranges >= rmin) & (ranges <= rmax)
-        if not np.any(valid):
-            return
-
-        # Ego pose in map frame (latest cached pose; may be slightly stale —
-        # acceptable, the ego moves at <12 m/s and detection runs at ~12 Hz).
-        pose = pose_msg.pose.pose
-        ego_x = float(pose.position.x)
-        ego_y = float(pose.position.y)
-        ego_yaw = float(self.quaternion_to_yaw(pose.orientation))
-
-        # Convert ALL beams to map frame so the SDF batch shape is constant
-        # (n,). Bad beams (inf/nan range) produce NaN coords; we mask them
-        # out post-SDF using `valid`.
-        safe_r = np.where(finite, ranges, 0.0)
-        map_a = ego_yaw + angles
-        all_x = ego_x + safe_r * np.cos(map_a)
-        all_y = ego_y + safe_r * np.sin(map_a)
-        all_pts = np.stack([all_x, all_y], axis=-1)
-
-        wall_skip = float(self.config.inproc_opp_wall_skip_dist)
-        if (wall_skip > 0.0
-                and getattr(self, 'infer_env', None) is not None
-                and getattr(self.infer_env, 'wall_sdf', None) is not None):
-            try:
-                wall_d = np.asarray(
-                    self.infer_env.sample_wall_distance(jnp.asarray(all_pts)),
-                    dtype=np.float32,
-                )
-                valid = valid & (wall_d >= wall_skip)
-            except Exception as exc:
-                self.get_logger().warn(
-                    f"inproc_opp: wall SDF lookup failed ({exc}); skipping wall filter")
-
-        if not np.any(valid):
-            return
-
-        # Cluster surviving beams by consecutive scan-index runs.
-        valid_idx = np.where(valid)[0]
-        min_pts = int(self.config.inproc_opp_min_cluster_pts)
-        if valid_idx.size < min_pts:
-            return
-        breaks = np.where(np.diff(valid_idx) > 2)[0]  # tolerate single-beam gaps
-        starts = np.concatenate(([0], breaks + 1))
-        ends = np.concatenate((breaks + 1, [valid_idx.size]))
-
-        max_width = float(self.config.inproc_opp_max_cluster_width)
-        best_dist = np.inf
-        best_centroid = None
-        for s, e in zip(starts, ends):
-            if e - s < min_pts:
-                continue
-            beam_idx = valid_idx[s:e]
-            cluster = all_pts[beam_idx]
-            bbox = cluster.max(0) - cluster.min(0)
-            if float(np.hypot(bbox[0], bbox[1])) > max_width:
-                continue
-            centroid = cluster.mean(axis=0)
-            d = float(np.hypot(centroid[0] - ego_x, centroid[1] - ego_y))
-            if d < best_dist:
-                best_dist = d
-                best_centroid = centroid
-        if best_centroid is None:
-            return
-
-        n_steps = int(self.config.n_steps)
-        self.opponent_xy_horizon = np.tile(
-            best_centroid.astype(np.float32),
-            (n_steps, 1),
-        )
-        self.opponent_path_time = now
 
     def opponent_path_callback(self, msg):
         self._stats_opponent_rx += 1
@@ -2445,13 +2146,6 @@ class MPPI_Node(Node):
             )
             self.control[1] = float(max(self.control[1], startup_speed))
 
-        # In-process /scan-based static-obstacle safety brake. APPLIED LAST
-        # so it overrides startup_speed when there's an obstacle in front —
-        # we'd rather coast below startup_speed than ram the obstacle.
-        scan_cap = self._scan_safety_speed_cap()
-        if scan_cap is not None:
-            self.control[1] = min(self.control[1], scan_cap)
-
         if np.isnan(self.control).any() or np.isinf(self.control).any():
             self.control = np.array([0.0, 0.0])
             self.mppi.a_opt = np.zeros_like(self.mppi.a_opt)
@@ -2475,44 +2169,61 @@ class MPPI_Node(Node):
             # bound memory under stats_log_interval=0
             self._stats_solve_times = self._stats_solve_times[-256:]
 
-        # ---- Phase timing for post-drive work ----
-        # `solve_dt` (above) only covers the path that produces /drive. The
-        # blocks below (debug topic publish, marker viz, speed_debug) can do
-        # JAX host syncs (numpify) and significant CPU work, and they're NOT
-        # included in solve_dt. When we see "solve max=25ms" but the timer
-        # appears stalled, the time is being eaten here. Three phase scalars:
-        #   phase_post_drive_debug — reward/auto/speed-debug publishing
-        #   phase_visualization     — marker rebuild + publish
-        #   phase_total             — entire control_step end-to-end
+        # ---- Post-drive debug + visualization block ----
+        # `solve_dt` (above) only covers the path that produces /drive.
+        # Everything below this line is OPTIONAL observability work that
+        # MUST NOT slow down control. Three layered defenses ensure that:
+        #
+        #   1. RATE GATE (this block): cap the entire block at
+        #      viz_publish_rate_hz (default 5 Hz, set 0 to disable
+        #      everything). Even if subscribers ARE listening, MPPI burns
+        #      serialization time at most ~5x/sec, not 30-40x/sec.
+        #   2. SUBSCRIBER COUNT GATES (each individual publish): skip the
+        #      numpify + marker-build work when nobody's listening.
+        #   3. publish_visualization() also has a `publish_markers` master
+        #      switch that bails before any marker work.
+        #
+        # All publishers here are BEST_EFFORT QoS, so a slow / SSH-tunneled
+        # subscriber cannot backpressure the publisher either. When nothing
+        # is subscribed AND publish_markers=false, this block is a few
+        # microseconds of `if` checks — effectively free.
         post_drive_t0 = time.time()
+        debug_dt = 0.0
+        viz_dt = 0.0
+        viz_rate = float(self.config.viz_publish_rate_hz)
+        if viz_rate > 0.0:
+            viz_period = 1.0 / viz_rate
+            now_t = time.time()
+            if (now_t - self._last_viz_pub_time) >= viz_period:
+                self._last_viz_pub_time = now_t
 
-        if self.reference_pub.get_subscription_count() > 0:
-            ref_traj_cpu = numpify(reference_traj)
-            arr_msg = to_multiarray_f32(ref_traj_cpu.astype(np.float32))
-            self.reference_pub.publish(arr_msg)
+                if self.reference_pub.get_subscription_count() > 0:
+                    ref_traj_cpu = numpify(reference_traj)
+                    arr_msg = to_multiarray_f32(ref_traj_cpu.astype(np.float32))
+                    self.reference_pub.publish(arr_msg)
 
-        if self.opt_traj_pub.get_subscription_count() > 0:
-            opt_traj_cpu = numpify(self.mppi.traj_opt)
-            arr_msg = to_multiarray_f32(opt_traj_cpu.astype(np.float32))
-            self.opt_traj_pub.publish(arr_msg)
+                if self.opt_traj_pub.get_subscription_count() > 0:
+                    opt_traj_cpu = numpify(self.mppi.traj_opt)
+                    arr_msg = to_multiarray_f32(opt_traj_cpu.astype(np.float32))
+                    self.opt_traj_pub.publish(arr_msg)
 
-        debug_t0 = time.time()
-        self.publish_reward_debug(reference_traj, opponent_traj, opponent_active, opponent_age)
-        self.publish_auto_mode_name()
-        if self.speed_debug_pub.get_subscription_count() > 0:
-            speed_debug = np.array([
-                vx_state,
-                mppi_speed_command,
-                profile_speed_command,
-                self.control[1],
-                self.config.speed_profile_drive_blend,
-            ], dtype=np.float32)
-            self.speed_debug_pub.publish(to_multiarray_f32(speed_debug))
-        debug_dt = time.time() - debug_t0
+                debug_t0 = time.time()
+                self.publish_reward_debug(reference_traj, opponent_traj, opponent_active, opponent_age)
+                self.publish_auto_mode_name()
+                if self.speed_debug_pub.get_subscription_count() > 0:
+                    speed_debug = np.array([
+                        vx_state,
+                        mppi_speed_command,
+                        profile_speed_command,
+                        self.control[1],
+                        self.config.speed_profile_drive_blend,
+                    ], dtype=np.float32)
+                    self.speed_debug_pub.publish(to_multiarray_f32(speed_debug))
+                debug_dt = time.time() - debug_t0
 
-        viz_t0 = time.time()
-        self.publish_visualization(reference_traj)
-        viz_dt = time.time() - viz_t0
+                viz_t0 = time.time()
+                self.publish_visualization(reference_traj)
+                viz_dt = time.time() - viz_t0
 
         total_dt = time.time() - t1
 

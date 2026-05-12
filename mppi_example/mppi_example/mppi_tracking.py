@@ -85,7 +85,7 @@ class MPPI():
         cost_params = [
             getattr(self.config, 'wall_cost_weight', 0.0) if getattr(self.config, 'wall_cost_enabled', False) else 0.0,
             getattr(self.config, 'wall_cost_margin', 0.0),
-            getattr(self.config, 'wall_cost_power', 2.0),
+            getattr(self.config, 'wall_cost_power', 0.01),
             getattr(self.config, 'slip_cost_weight', 0.0) if getattr(self.config, 'slip_cost_enabled', False) else 0.0,
             getattr(self.config, 'slip_cost_beta_safe', 0.0),
             getattr(self.config, 'latacc_cost_weight', 0.0) if getattr(self.config, 'latacc_cost_enabled', False) else 0.0,
