@@ -6,7 +6,7 @@ real hardware on a Jetson Orin Nano). Built on
 [mlab-upenn/mppi_example](https://github.com/mlab-upenn/mppi_example)
 (MIT, © 2025 xLab for Safe Autonomous Systems).
 
-This single repository covers both our **final race** and **final project**
+This repo was used for both the **final race** and **final project**
 for ESE 6150 (UPenn, Spring 2026).
 
 ## Team 5 Thunderbolt
@@ -19,8 +19,6 @@ for ESE 6150 (UPenn, Spring 2026).
 ## Demo
 
 ### Sim
-
-Each row: ~900 px combined width, both clips locked to the same height.
 
 <table>
   <tr>
@@ -306,18 +304,18 @@ These are real things we got wrong and then fixed; they're worth knowing if
 you build on this.
 
 **Foxglove / RViz subscribers can flood the MPPI node and cause SOFT timing
-gaps.** This was the single biggest debugging story of our last 3 weeks in the course.
+gaps.** This was the single biggest debugging issue of our last 3 weeks in the course.
 The moment a remote viz tool subscribed to debug topics
 (`/mppi/optimal_trajectory`, `/mppi/reference_trajectory`, etc.) over SSH, MPPI started
-dropping ticks. The fix is either don't visualize in rviz when running on the car or we tried these in the code:
-1. `viz_publish_rate_hz` (default 5 Hz) — caps the entire debug+viz block in
+dropping ticks. It was something hard to notice because we turned off visualization publishing but topics were still alive (publishing nothing), and somehow still corrupting the whole node. The fix is either don't visualize in rviz when running on the car or we tried these in the code after the race:
+1. `viz_publish_rate_hz` (default 5 Hz) - caps the entire debug+viz block in
    `control_step` regardless of solve rate
-2. `BEST_EFFORT` QoS on all debug topics — slow subscribers drop messages
+2. `BEST_EFFORT` QoS on all debug topics - slow subscribers drop messages
    instead of backpressuring the publisher
-3. Subscriber-count gates on every individual publish — skip the work if
+3. Subscriber-count gates on every individual publish - skip the work if
    nobody's listening
 
-`/drive` deliberately stays `RELIABLE` — the VESC needs every command.
+`/drive` deliberately stays `RELIABLE` - the VESC needs every command or it won't be smooth.
 
 **JAX on Jetson needs preallocation.** With `PREALLOCATE=false` (the JAX
 default), the unified-memory allocator can fragment over a long race and
