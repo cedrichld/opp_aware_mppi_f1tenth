@@ -46,7 +46,7 @@ for ESE 6150 (UPenn, Spring 2026).
     <td align="center" colspan="2"><b>Race start</b></td>
   </tr>
   <tr>
-    <td align="center" colspan="2"><img src="media/hardware_videos/race_start.gif" height="480"></td>
+    <td align="center" colspan="2"><img src="media/hardware_videos/race_start.gif" width=100%></td>
   </tr>
   <tr>
     <td align="center"><b>Static obstacle avoidance (Levine)</b></td>
