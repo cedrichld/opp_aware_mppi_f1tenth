@@ -11,10 +11,10 @@ for ESE 6150 (UPenn, Spring 2026).
 
 ## Team 5 Thunderbolt
 
-- Cedric Hollande — [@cedrichld](https://github.com/cedrichld)
-- Zach Rudder — [@zachrudder](https://github.com/zachrudder)
-- Maanasa Rajeshwer — [@MaanaRajesh](https://github.com/MaanaRajesh)
-- Boyuan Yang — [@yang50-guaidao](https://github.com/yang50-guaidao)
+- Cedric Hollande - [@cedrichld](https://github.com/cedrichld)
+- Zach Rudder - [@zachrudder](https://github.com/zachrudder)
+- Maanasa Rajeshwer - [@MaanaRajesh](https://github.com/MaanaRajesh)
+- Boyuan Yang - [@yang50-guaidao](https://github.com/yang50-guaidao)
 
 ## Demo
 
@@ -62,7 +62,7 @@ for ESE 6150 (UPenn, Spring 2026).
 
 
 
-> Long-form video: [YouTube — MPPI Project Demo](https://youtu.be/NFLvNrOb9cU) - longer clips in [`media/hardware_videos/`](media/hardware_videos)
+> Long-form video: [YouTube - MPPI Project Demo Levine](https://youtu.be/NFLvNrOb9cU), [YouTube - MPPI Project Demo Houston](https://youtube.com/shorts/2QTc-SeHTgE?si=4ut7kjXXJcAOgV-o) - longer clips in [`media/hardware_videos/`](media/hardware_videos)
 
 ---
 
@@ -88,7 +88,7 @@ $\bar U$, rolls each one through a JAX-vmapped vehicle model over horizon
 $H = 8$ steps (sim_time_step = 0.1 s → 0.8 s lookahead), and scores the
 resulting trajectories. The score combines tracking rewards
 (xy, yaw, velocity vs. raceline) with cost terms for wall proximity,
-sideslip $\beta$, lateral acceleration, and steering saturation — each
+sideslip $\beta$, lateral acceleration, and steering saturation - each
 toggleable from YAML.
 
 Sample weights use the standard MPPI softmax with temperature $\lambda$:
@@ -131,7 +131,7 @@ opponent_predictor          mppi_node                ───►  /drive  (RELI
 - **Localization:** `particle_filter` (cloned from `f1tenth/particle_filter`),
   8K particles, runs at ~50 Hz on cores 0,1,2 of the Jetson.
 - **Controller:** `mppi_node` (in `mppi_example/`), JAX-based MPPI on cores 3,4,5.
-- **Opponent perception:** `opponent_predictor` (C++) — clusters `/scan` returns,
+- **Opponent perception:** `opponent_predictor` (C++) - clusters `/scan` returns,
   filters against the static map's wall SDF, projects detections onto the
   raceline arclength `s`, and runs a Kalman filter on `(s, v)`. Publishes a
   short-horizon prediction on `/opponent/predicted_path` that MPPI consumes
@@ -141,14 +141,14 @@ opponent_predictor          mppi_node                ───►  /drive  (RELI
 
 ## Layout
 
-- `mppi_example/` — controller. `mppi_node.py` (odom → `/drive`),
+- `mppi_example/` - controller. `mppi_node.py` (odom → `/drive`),
   `mppi_tracking.py` (JAX rollout loop), `dynamics_models/` (vehicle models).
-- `mppi_bringup/` — launch files, params, waypoint CSVs, maps.
-- `opponent_predictor/` — raceline-progress opponent prediction with
+- `mppi_bringup/` - launch files, params, waypoint CSVs, maps.
+- `opponent_predictor/` - raceline-progress opponent prediction with
   Foxglove/RViz visualization and debug topics.
-- `MPPI_SYSTEM_OVERVIEW.md` — deeper math + code map.
-- `media/MPPI_GUIDE.md` — tuning notes.
-- `IMPORTANT_DEBUG_MPPI.md` — race-day debugging cheat sheet.
+- `MPPI_SYSTEM_OVERVIEW.md` - deeper math + code map.
+- `media/MPPI_GUIDE.md` - tuning notes.
+- `IMPORTANT_DEBUG_MPPI.md` - race-day debugging cheat sheet.
 
 ---
 
@@ -170,7 +170,7 @@ colcon build --symlink-install \
 source install/setup.bash
 ```
 
-## Run — Sim
+## Run - Sim
 Clone f1tenth_gym_ros from. Then in parallel terminals:
 [our dev-humble fork](https://github.com/cedrichld/f1tenth_gym_ros/tree/dev-humble).
 ```bash
@@ -192,7 +192,7 @@ ros2 launch mppi_bringup sim_houston.launch.py
 ros2 launch opponent_predictor lev_sim_opponent_predictor.launch.py
 ```
 
-## Run — Hardware (Jetson)
+## Run - Hardware (Jetson)
 
 Four terminals:
 
@@ -249,8 +249,8 @@ real headroom:
 | Thermals | 53-55 °C | Tj limit 105 °C | `cool` fan profile reacts on temp rise |
 
 We run **8K MPPI samples (40Hz) + 8K PF particles (50Hz)** consistently with zero SOFT
-timing gaps. The compute path can take more — solve mean stays ~6 ms even
-at 8192 samples because JAX scales sub-linearly on GPU — but we found
+timing gaps. The compute path can take more - solve mean stays ~6 ms even
+at 8192 samples because JAX scales sub-linearly on GPU - but we found
 **no measurable control improvement past ~8K samples**, and going higher
 just eats memory
 
@@ -388,3 +388,7 @@ on race day if you must.
 ## License
 
 MIT: see [`LICENSE`](LICENSE). Includes upstream's MIT notice from xLab.
+
+<p align="center">
+  <img src="media/Houston_Hall_Flags_Group_Pic.png" width="100%">
+</p>
