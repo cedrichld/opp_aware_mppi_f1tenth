@@ -43,24 +43,28 @@ for ESE 6150 (UPenn, Spring 2026).
 
 <table>
   <tr>
+    <td align="center" colspan="2"><b>Race start</b></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><img src="media/hardware_videos/race_start.gif" height="480"></td>
+  </tr>
+  <tr>
     <td align="center"><b>Static obstacle avoidance (Levine)</b></td>
     <td align="center"><b>Dynamically avoiding a moving target</b></td>
   </tr>
   <tr>
-    <td align="center"><img src="media/hardware_videos/static_obstacle_avoidance_levine.gif" height="380"></td>
-    <td align="center"><img src="media/hardware_videos/dynamically_avoiding_me.gif" height="380"></td>
+    <td align="center"><img src="media/hardware_videos/static_obstacle_avoidance_levine.gif" height="350"></td>
+    <td align="center"><img src="media/hardware_videos/avoiding_several_cars.gif" height="350"></td>
   </tr>
   <tr>
     <td align="center"><b>Avoiding several cars on the track</b></td>
     <td align="center"><b>Race-day overtake</b></td>
   </tr>
   <tr>
-    <td align="center"><img src="media/hardware_videos/avoiding_several_cars.gif" height="260"></td>
-    <td align="center"><img src="media/hardware_videos/race_day_overtake.gif" height="260"></td>
-  </tr>
+    <td align="center"><img src="media/hardware_videos/dynamically_avoiding_me.gif" height="350"></td>
+    <td align="center"><img src="media/hardware_videos/race_day_overtake.gif" height="350"></td>
+  </tr>  
 </table>
-
-
 
 > Long-form video: [YouTube - MPPI Project Demo Levine](https://youtu.be/NFLvNrOb9cU), [YouTube - MPPI Project Demo Houston](https://youtube.com/shorts/2QTc-SeHTgE?si=4ut7kjXXJcAOgV-o) - longer clips in [`media/hardware_videos/`](media/hardware_videos)
 
