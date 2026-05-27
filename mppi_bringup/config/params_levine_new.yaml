@@ -34,22 +34,22 @@ lmppi_node:
 
     # Live tuning parameters: mppi_node.get_params() refreshes these on every
     # odometry callback, so they can be changed with ros2 param set.
-    temperature: 0.2             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
+    temperature: 0.05      # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
     # damping: 0.001                # Prevents weight normalization issues when rollout rewards are similar.
     # ref_vel: 2.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
-    init_vel: 1.5                 # Minimum speed assumed by the rollout model at startup/very low speed.
+    init_vel: 2.0                 # Minimum speed assumed by the rollout model at startup/very low speed.
     startup_speed: 1.0            # Minimum /drive.speed while measured speed is below init_vel.
     use_pose_delta_state_estimate: true # Real car: estimate vx / yaw-rate from PF pose deltas plus command prior.
-    friction: 0.45                # Model-only tire/friction belief for dynamic_ST rollouts; tune empirically.
-    # n_iterations: 1               # MPPI update passes per odom callback. More can improve solve quality but costs time.
+    friction: 0.4                # Model-only tire/friction belief for dynamic_ST rollouts; tune empirically.
+    n_iterations: 4               # MPPI update passes per odom callback. More can improve solve quality but costs time.
 
     # Use the MPPI raceline CSV vx_mps column for turn-aware reference spacing.
     # These affect what MPPI optimizes against: future XY points and velocity
     # targets become slower in turns and faster on straights.
     use_waypoint_speed_profile: true   # true: use raceline vx_mps; false: use constant ref_vel spacing.
-    speed_profile_scale: 0.8          # Multiplies raceline vx_mps. Raise to push pace; lower for stability.
+    speed_profile_scale: 1.0          # Multiplies raceline vx_mps. Raise to push pace; lower for stability.
     speed_profile_min_speed: 1.0       # Lower clamp for reference/profile speed after scaling.
-    speed_profile_max_speed: 8.0      # Upper clamp for reference/profile speed after scaling.
+    speed_profile_max_speed: 11.0      # Upper clamp for reference/profile speed after scaling.
     speed_profile_lookahead_steps: 3   # Planning brake lookahead: min speed over current..N future ref steps.
     speed_profile_iterations: 3        # Rebuild reference using profiled speeds this many times; 2-3 is enough.
 
@@ -64,7 +64,7 @@ lmppi_node:
     # speed_profile_drive_max_decel: 8.0       # Max commanded speed decrease in m/s^2; usually higher than accel.
 
     # MPPI control exploration.
-    control_sample_std_steer: 0.8      # Std dev of normalized steering-rate noise. Higher explores sharper turns.
+    control_sample_std_steer: 1.0      # Std dev of normalized steering-rate noise. Higher explores sharper turns.
     control_sample_std_accel: 3.0      # Std dev of normalized accel noise. Higher explores harder accel/brake.
 
     # Physical scale for normalized controls.
@@ -82,14 +82,14 @@ lmppi_node:
 
     wall_cost_enabled: false
     wall_cost_weight: 20.0
-    wall_cost_margin: 0.4
+    wall_cost_margin: 0.25
     wall_cost_power: 0.6
     wall_cost_map_yaml: '' #injected by launch
 
     # Opponent-aware MPPI cost. Keep disabled until /opponent/predicted_path
     # is healthy, then tune weight/radius live with ros2 param set.
     opponent_path_topic: /opponent/predicted_path
-    opponent_cost_enabled: true
+    opponent_cost_enabled: false
     opponent_cost_weight: 100.0
     opponent_cost_radius: 0.6
     opponent_cost_power: 2.0

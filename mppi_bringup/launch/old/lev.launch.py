@@ -34,7 +34,7 @@ def generate_launch_description():
     )
 
     pkg_share = get_package_share_directory('mppi_bringup')
-    csv_path = os.path.join(pkg_share, 'waypoints', 'lev_testing', 'rt_lev3.csv')
+    csv_path = os.path.join(pkg_share, 'waypoints', 'old', 'lev_testing', 'rt_lev3.csv')
 
     mppi_node = Node(
         package='mppi_example',
@@ -54,7 +54,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
                 'config',
-                'params_lev.yaml',
+                'params_levine_new.yaml',
             ]),
             description='YAML with MPPI ROS2 params for actual car',
         ),
@@ -68,7 +68,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
                 'maps',
-                'racetrack_levine_cleaned.yaml',
+                'racetrack_levine_half.yaml',
             ]),
             description='Static map yaml used to build the wall-distance cost field',
         ),
