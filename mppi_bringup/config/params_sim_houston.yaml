@@ -9,6 +9,7 @@ lmppi_node:
     state_predictor: dynamic_ST
     n_samples: 8192
     n_steps: 8
+    n_iterations: 10
     sim_time_step: 0.1
     random_seed: 527787
     render: true                 # debug-disabled mode for timing-gap diagnosis
@@ -36,7 +37,7 @@ lmppi_node:
 
 
     # Live tuning parameters
-    temperature: 0.02
+    temperature: 0.03
     init_vel: 2.1
     startup_speed: 1.0
     use_pose_delta_state_estimate: false   # sim has clean twist
@@ -52,10 +53,10 @@ lmppi_node:
     use_speed_profile_drive_speed: false
     speed_profile_drive_lookahead_steps: 0
 
-    control_sample_std_steer: 2.0
-    control_sample_std_accel: 10.0
+    control_sample_std_steer: 1.0
+    control_sample_std_accel: 5.0
     steer_vel_scale: 3.0
-    accel_scale: 4.0
+    accel_scale: 6.0
 
     ######################################################
     ################### Reward weights ###################
@@ -72,24 +73,24 @@ lmppi_node:
 
     opponent_path_topic: /opponent/predicted_path
     opponent_cost_enabled: true
-    opponent_cost_weight: 40.0
-    opponent_cost_radius: 0.5
+    opponent_cost_weight: 20.0
+    opponent_cost_radius: 0.25
     opponent_cost_power: 0.4
-    opponent_cost_discount: 1.0
+    opponent_cost_discount: 0.9
     opponent_path_timeout: 0.5
     opponent_behavior_mode: auto
     opponent_follow_weight: 8.0
     opponent_follow_distance: 1.2
     opponent_same_lane_width: 0.7
-    opponent_pass_weight: 12.0
-    opponent_pass_lateral_offset: 0.55
-    opponent_pass_longitudinal_window: 1.5
+    opponent_pass_weight: 40.0
+    opponent_pass_lateral_offset: 0.35
+    opponent_pass_longitudinal_window: 1.0
     opponent_auto_wall_check_enabled: true
-    opponent_auto_min_wall_clearance: 0.45
-    opponent_auto_check_steps: 3
+    opponent_auto_min_wall_clearance: 0.12
+    opponent_auto_check_steps: 5
     opponent_auto_min_closing_speed: 0.4
     opponent_auto_max_ahead_distance: 4.0
-    opponent_auto_side_switch_margin: 0.08
+    opponent_auto_side_switch_margin: 0.04
 
     slip_cost_enabled: false
     slip_cost_weight: 2.0
@@ -119,7 +120,7 @@ lmppi_node:
     ###################### BACKEND #######################
     ######################################################
     min_speed: 0.0
-    max_speed: 12.0
+    max_speed: 15.0
     max_steering_angle: 0.4189
 
     # Visualization OFF — this profile is the "no debug" leg of the A/B

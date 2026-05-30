@@ -145,7 +145,7 @@ lmppi_node:
     ######################################################
     # Output safety clamps.
     min_speed: 0.0                    # Final /drive.speed lower clamp.
-    max_speed: 12.0                   # Final /drive.speed upper clamp; profile/feedforward usually limits first.
+    max_speed: 15.0                   # Final /drive.speed upper clamp; profile/feedforward usually limits first.
     max_steering_angle: 0.4189        # Final steering angle clamp, matching F1TENTH steering limit.
 
     # RViz visualization. Add MarkerArray displays for these topics:
