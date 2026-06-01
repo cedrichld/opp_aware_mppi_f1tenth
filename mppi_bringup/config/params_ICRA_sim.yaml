@@ -41,6 +41,10 @@ lmppi_node:
     init_vel: 2.0
     startup_speed: 1.0
     use_pose_delta_state_estimate: false   # sim has clean twist
+    # Fallback friction belief — used only when the raceline CSV has no per-waypoint
+    # friction column (col 10). When the CSV does carry friction, MPPI rolls out
+    # with per-step μ along the reference and ignores this scalar (Raceline Studio
+    # writes col 10 when you've used Set min μ / Set max μ on selections).
     friction: 0.41
 
     use_waypoint_speed_profile: true

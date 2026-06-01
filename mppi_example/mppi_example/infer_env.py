@@ -36,6 +36,17 @@ class InferEnv():
         self.waypoints = track.waypoints
         self.diff = self.waypoints[1:, 1:3] - self.waypoints[:-1, 1:3]
         self.waypoints_distances = np.linalg.norm(self.waypoints[1:, (1, 2)] - self.waypoints[:-1, (1, 2)], axis=1)
+        # Per-waypoint friction: pull from track if CSV had column 10, else broadcast config.friction
+        # so downstream code can always index `self.waypoint_frictions[i]`.
+        track_fric = getattr(track, "frictions", None)
+        if track_fric is not None and np.isfinite(track_fric).all():
+            self.waypoint_frictions = np.asarray(track_fric, dtype=np.float32)
+            self.has_per_waypoint_friction = True
+            print(f"InferEnv: per-waypoint friction loaded ({len(self.waypoint_frictions)} pts, "
+                  f"min={self.waypoint_frictions.min():.3f}, max={self.waypoint_frictions.max():.3f})")
+        else:
+            self.waypoint_frictions = np.full(len(self.waypoints), float(config.friction), dtype=np.float32)
+            self.has_per_waypoint_friction = False
         self.reference = None
         self.DT = DT
         self.config = config
@@ -108,6 +119,34 @@ class InferEnv():
         self.waypoints = waypoints
         self.diff = self.waypoints[1:, 1:3] - self.waypoints[:-1, 1:3]
         self.waypoints_distances = np.linalg.norm(self.waypoints[1:, (1, 2)] - self.waypoints[:-1, (1, 2)], axis=1)
+        # Re-read friction column if present (10th column)
+        if waypoints.shape[1] >= 10:
+            fric = waypoints[:, 9]
+            if np.isfinite(fric).all():
+                self.waypoint_frictions = np.asarray(fric, dtype=np.float32)
+                self.has_per_waypoint_friction = True
+                return
+        # Fall back to scalar broadcast
+        self.waypoint_frictions = np.full(len(waypoints), float(self.config.friction), dtype=np.float32)
+        self.has_per_waypoint_friction = False
+
+    def get_reference_frictions(self, state, n_steps):
+        """Return per-step friction along the upcoming reference horizon.
+
+        Uses nearest-waypoint-index lookup from the same starting point as
+        `get_refernece_traj`. Falls back to scalar `config.friction` array if no
+        per-waypoint friction is loaded. Always returns a `(n_steps,)` jnp array.
+        """
+        if not self.has_per_waypoint_friction:
+            return jnp.full((int(n_steps),), float(self.config.friction), dtype=jnp.float32)
+        _, _, _, _, ind = nearest_point(np.array([state[0], state[1]]),
+                                        self.waypoints[:, (1, 2)].copy(), self.diff)
+        N = len(self.waypoint_frictions)
+        # Walk indices forward — one waypoint per horizon step (matches the
+        # spatial coarseness of the reference; finer-grained interpolation is
+        # not worth the complexity given mu changes slowly along the track).
+        idxs = (int(ind) + np.arange(int(n_steps))) % N
+        return jnp.asarray(self.waypoint_frictions[idxs], dtype=jnp.float32)
     
     @partial(jax.jit, static_argnums=(0,))
     def reward_fn_xy(self, state, reference, reward_weights=None, cost_params=None, opponent_traj=None):

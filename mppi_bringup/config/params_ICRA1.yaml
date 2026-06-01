@@ -35,13 +35,16 @@ lmppi_node:
 
     # Live tuning parameters: mppi_node.get_params() refreshes these on every
     # odometry callback, so they can be changed with ros2 param set.
-    temperature: 0.005             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
+    temperature: 0.01             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
     # damping: 0.001                # Prevents weight normalization issues when rollout rewards are similar.
     # ref_vel: 2.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
-    init_vel: 2.0                 # Minimum speed assumed by the rollout model at startup/very low speed.
+    init_vel: 2.5                 # Minimum speed assumed by the rollout model at startup/very low speed.
     startup_speed: 1.0            # Minimum /drive.speed while measured speed is below init_vel.
     use_pose_delta_state_estimate: true # Real car: estimate vx / yaw-rate from PF pose deltas plus command prior.
-    friction: 0.5                # Model-only tire/friction belief for dynamic_ST rollouts; tune empirically.
+    # Fallback friction belief — used only when the raceline CSV has no per-waypoint
+    # friction column (col 10). When the CSV does carry friction, MPPI rolls out
+    # with per-step μ along the reference and ignores this scalar.
+    friction: 0.5
     # n_iterations: 1               # MPPI update passes per odom callback. More can improve solve quality but costs time.
 
     # Use the MPPI raceline CSV vx_mps column for turn-aware reference spacing.
@@ -92,7 +95,7 @@ lmppi_node:
     opponent_path_topic: /opponent/predicted_path
     opponent_cost_enabled: true
     opponent_cost_weight: 20.0
-    opponent_cost_radius: 0.3
+    opponent_cost_radius: 0.4
     opponent_cost_power: 0.4
     opponent_cost_discount: 0.9
     opponent_path_timeout: 0.5

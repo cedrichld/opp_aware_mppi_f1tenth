@@ -132,7 +132,8 @@ class MPPI_Node(Node):
         state_c_0 = np.asarray([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.control = np.asarray([0.0, 0.0])
         reference_traj, waypoint_ind = self.infer_env.get_refernece_traj(state_c_0.copy(), self.config.ref_vel, self.config.n_steps)
-        
+        ref_frictions = self.infer_env.get_reference_frictions(state_c_0, self.config.n_steps)
+
         self.opponent_xy_horizon = np.zeros((self.config.n_steps, 2), dtype=np.float32)
         self.opponent_path_time = None
         self.mppi.update(
@@ -140,6 +141,7 @@ class MPPI_Node(Node):
             jnp.asarray(reference_traj),
             jnp.asarray(self.opponent_xy_horizon),
             False,
+            reference_frictions=ref_frictions,
         )
         # Pre-warm sample_wall_distance with the (n_probes, 2) shape that
         # opponent_pass_clearance will use at runtime. Without this, the
@@ -372,9 +374,9 @@ class MPPI_Node(Node):
                 response.success = False
                 response.message = f"expected format='mppi', got '{request.format}'"
                 return response
-            if request.cols != 9:
+            if request.cols not in (9, 10):
                 response.success = False
-                response.message = f"expected cols=9, got {request.cols}"
+                response.message = f"expected cols=9 or 10, got {request.cols}"
                 return response
             expected_rows = int(self.infer_env.waypoints.shape[0])
             if int(request.rows) != expected_rows:
@@ -2023,11 +2025,13 @@ class MPPI_Node(Node):
 
         ## MPPI call
         solve_t0 = time.time()
+        ref_frictions = self.infer_env.get_reference_frictions(state_c_0, self.config.n_steps)
         self.mppi.update(
             jnp.asarray(state_c_0),
             jnp.asarray(reference_traj),
             jnp.asarray(opponent_traj),
             opponent_active,
+            reference_frictions=ref_frictions,
         )
         a_opt_cpu = np.asarray(numpify(self.mppi.a_opt))
         solve_time = time.time() - solve_t0

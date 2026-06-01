@@ -42,12 +42,29 @@ class MPPI():
             self.a_cov_init = self.a_cov
             
             
-    def update(self, env_state, reference_traj, opponent_traj=None, opponent_active=False):
+    def update(self, env_state, reference_traj, opponent_traj=None, opponent_active=False,
+               reference_frictions=None):
+        """reference_frictions: optional jnp.array of shape (n_steps,) giving the
+        friction value at each horizon step. If None, the scalar config.friction
+        is broadcast across all steps (legacy behavior)."""
         if opponent_traj is None:
             opponent_traj = jnp.zeros((self.n_steps, 2), dtype=jnp.float32)
         a_std, temperature, damping, reward_weights, cost_params, norm_params, friction = self.runtime_params(
             opponent_active=opponent_active
         )
+        # friction from runtime_params is now a (n_steps,) array — see below.
+        # If caller supplied per-step frictions (from the track waypoints), use those.
+        if reference_frictions is not None:
+            rf = jnp.asarray(reference_frictions, dtype=jnp.float32)
+            # Defensive: pad/truncate to n_steps so the JIT trace shape is fixed.
+            if rf.shape[0] != self.n_steps:
+                if rf.shape[0] > self.n_steps:
+                    rf = rf[:self.n_steps]
+                else:
+                    pad = jnp.full((self.n_steps - rf.shape[0],), rf[-1] if rf.shape[0] > 0 else self.config.friction,
+                                   dtype=jnp.float32)
+                    rf = jnp.concatenate([rf, pad])
+            friction = rf
         self.a_opt, self.a_cov = self.shift_prev_opt(self.a_opt, self.a_cov, a_std)
         for _ in range(self.n_iterations):
             self.a_opt, self.a_cov, self.states, self.traj_opt = self.iteration_step(
@@ -115,7 +132,9 @@ class MPPI():
             jnp.asarray(reward_weights, dtype=jnp.float32),
             jnp.asarray(cost_params, dtype=jnp.float32),
             jnp.asarray(self.config.norm_params, dtype=jnp.float32),
-            jnp.asarray(self.config.friction, dtype=jnp.float32),
+            # Friction defaults to a (n_steps,) array broadcast of config.friction.
+            # `MPPI.update` overrides this with per-step values when reference_frictions is supplied.
+            jnp.full((self.n_steps,), float(self.config.friction), dtype=jnp.float32),
         )
 
     
@@ -206,25 +225,29 @@ class MPPI():
     @partial(jax.jit, static_argnums=0)
     def rollout(self, actions, env_state, rng_key, norm_params, friction):
         """
-        # actions: [n_steps, a_shape]
-        # env: {.step(states, actions), .reward(states)}
-        # env_state: np.float32
-        # actions: # a_0, ..., a_{n_steps}. [n_steps, a_shape]
-        # states: # s_1, ..., s_{n_steps+1}. [n_steps, env_state_shape]
+        actions: [n_steps, a_shape]
+        friction: (n_steps,) per-step friction (or scalar — see fallback below)
+        env: {.step(states, actions), .reward(states)}
+        env_state: np.float32
+        actions: # a_0, ..., a_{n_steps}. [n_steps, a_shape]
+        states: # s_1, ..., s_{n_steps+1}. [n_steps, env_state_shape]
         """
-    
-        def rollout_step(env_state, actions, rng_key):
-            actions = jnp.reshape(actions, self.env.a_shape)
+        # Ensure friction is a (n_steps,) array — scalars (legacy callers) get
+        # broadcast. Doing this once outside the loop keeps the JIT trace stable.
+        friction_arr = jnp.broadcast_to(jnp.atleast_1d(friction), (self.n_steps,))
+
+        def rollout_step(env_state, action, mu_t, rng_key):
+            action = jnp.reshape(action, self.env.a_shape)
             (env_state, env_var, mb_dyna) = self.env.step(
-                env_state, actions, rng_key, norm_params, friction
+                env_state, action, rng_key, norm_params, mu_t
             )
             return env_state
-        
+
         states = []
         for t in range(self.n_steps):
-            env_state = rollout_step(env_state, actions[t, :], rng_key)
+            env_state = rollout_step(env_state, actions[t, :], friction_arr[t], rng_key)
             states.append(env_state)
-            
+
         return jnp.asarray(states)
     
     

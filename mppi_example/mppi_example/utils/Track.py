@@ -107,8 +107,8 @@ class Track:
         """
         assert (
             waypoints.shape[1] >= 7
-        ), "expected waypoints as [s, x, y, psi, k, vx, ax]"
-        
+        ), "expected waypoints as [s, x, y, psi, k, vx, ax, (w_right, w_left, friction)]"
+
         ss=waypoints[::downsample_step, 0]
         xs=waypoints[::downsample_step, 1]
         ys=waypoints[::downsample_step, 2]
@@ -116,18 +116,14 @@ class Track:
         ks=waypoints[::downsample_step, 4]
         vxs=waypoints[::downsample_step, 5]
         axs=waypoints[::downsample_step, 6]
-        
-        tr_lefts = None
-        tr_rights = None
-        if waypoints.shape[1] == 9:
-            tr_rights=waypoints[::downsample_step, 7]
-            tr_lefts=waypoints[::downsample_step, 8]
-        else:
-            tr_rights=None
-            tr_lefts=None
+
+        # cols 7,8 = w_tr_right, w_tr_left (optional); col 9 = per-waypoint friction (optional)
+        tr_rights = waypoints[::downsample_step, 7] if waypoints.shape[1] >= 9 else None
+        tr_lefts  = waypoints[::downsample_step, 8] if waypoints.shape[1] >= 9 else None
+        frictions = waypoints[::downsample_step, 9] if waypoints.shape[1] >= 10 else None
         refline = CubicSplineND(xs, ys, yaws, ks, vxs, axs)
 
-        return Track(
+        track = Track(
             xs=xs,
             ys=ys,
             velxs=vxs,
@@ -143,6 +139,9 @@ class Track:
             tr_rights=tr_rights,
             tr_lefts=tr_lefts
         )
+        # Per-waypoint friction (None if CSV doesn't carry it — caller falls back to config.friction)
+        track.frictions = frictions
+        return track
     
     def to_raceline_csv(self, filepath: pathlib.Path, delimiter: str = ";" ) -> None:
         """
@@ -290,9 +289,10 @@ class Track:
         vxs=waypoints[::downsample_step, 5]
         axs=waypoints[::downsample_step, 6]
 
+        frictions = waypoints[::downsample_step, 9] if waypoints.shape[1] >= 10 else None
         refline = CubicSplineND(xs, ys, yaws, ks, vxs, axs)
 
-        return Track(
+        track = Track(
             xs=xs,
             ys=ys,
             velxs=vxs,
@@ -305,7 +305,9 @@ class Track:
             centerline=refline,
             waypoints=waypoints,
         )
-    
+        track.frictions = frictions
+        return track
+
     def frenet_to_cartesian(self, s, ey, ephi):
         """
         Convert Frenet coordinates to Cartesian coordinates.
