@@ -17,7 +17,7 @@ opponent_predictor:
 
     prediction_steps: 5
     prediction_dt: 0.1
-    publish_rate_hz: 10.0
+    publish_rate_hz: 40.0
 
     speed_profile_scale: 1.0
     speed_profile_min_speed: 0.0

@@ -19,7 +19,7 @@ opponent_lidar_detector:
     laser_y_offset: 0.0
     laser_yaw_offset: 0.0
 
-    opponent_length: 0.58
+    opponent_length: 0.35
     opponent_width: 0.31
     max_center_correction: 0.35
 
@@ -32,12 +32,12 @@ opponent_lidar_detector:
 
     require_static_map: true
     occupied_threshold: 10
-    wall_inflation_radius: 0.3
+    wall_inflation_radius: 0.13
     treat_unknown_as_static: true
 
-    cluster_tolerance: 0.18
+    cluster_tolerance: 0.25
     min_cluster_points: 4
-    max_cluster_points: 300
+    max_cluster_points: 500
     min_cluster_extent: 0.04
     max_cluster_extent: 0.5
 
@@ -51,4 +51,4 @@ opponent_lidar_detector:
     projection_weight: 1.0
     range_weight: 0.2
     max_detection_speed: 7.5
-    detection_publish_rate_hz: 10.0
+    detection_publish_rate_hz: 40.0
