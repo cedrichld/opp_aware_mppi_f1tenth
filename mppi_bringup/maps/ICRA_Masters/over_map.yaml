@@ -1,0 +1,18 @@
+# TODO: Replace this placeholder with the real OVER (upper-bridge) map yaml
+# produced by SLAM at the venue. SLAM the upper deck while the car is on it,
+# starting from the SAME tape mark as the under map so they share the world
+# (0, 0). PF won't switch maps cleanly otherwise — particles are in world
+# coordinates and need that frame to be consistent.
+#
+# When cleaning the PGM in GIMP for MPPI:
+#   - keep upper-deck walls / guardrails
+#   - remove anything BELOW the deck that lidar saw on the way down the ramp
+#     (those are not "walls" from on top of the deck)
+
+image: TODO_over_map.pgm    # TODO
+resolution: 0.05            # TODO: must match the UNDER map exactly (PF
+                            #       sensor model table assumes equal res)
+origin: [0.0, 0.0, 0.0]     # TODO: copy from slam_toolbox output
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

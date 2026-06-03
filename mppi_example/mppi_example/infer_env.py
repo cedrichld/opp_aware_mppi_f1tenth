@@ -30,7 +30,11 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDANUM)
 
 class InferEnv():
     def __init__(self, track, config, DT,
-                 jrng=None, dyna_config=None) -> None:
+                 jrng=None, dyna_config=None, wall_cost_map_yaml_override=None) -> None:
+        # When provided, this overrides config.wall_cost_map_yaml for THIS
+        # instance only (so dual-region bridge mode can build two InferEnvs
+        # off the same shared config without their wall SDFs cross-leaking).
+        self._wall_cost_map_yaml_override = wall_cost_map_yaml_override
         self.a_shape = 2
         self.track = track
         self.waypoints = track.waypoints
@@ -390,9 +394,12 @@ class InferEnv():
             bool(getattr(self.config, 'wall_cost_enabled', False))
             or bool(getattr(self.config, 'opponent_auto_wall_check_enabled', False))
         )
+        map_yaml_active = (self._wall_cost_map_yaml_override
+                           if self._wall_cost_map_yaml_override
+                           else getattr(self.config, 'wall_cost_map_yaml', ''))
         signature = (
             needs_wall_sdf,
-            str(getattr(self.config, 'wall_cost_map_yaml', '')),
+            str(map_yaml_active),
         )
         if getattr(self, 'wall_cost_signature', None) == signature:
             return
@@ -404,10 +411,10 @@ class InferEnv():
 
         if not needs_wall_sdf:
             return
-        map_yaml = getattr(self.config, 'wall_cost_map_yaml', '')
+        map_yaml = map_yaml_active
         if not map_yaml:
             return
-        
+
         sdf, origin_xy, resolution = load_wall_distance_field(map_yaml)
         self.wall_sdf = jnp.asarray(sdf, dtype=jnp.float32)
         self.wall_origin = jnp.asarray(origin_xy, dtype=jnp.float32)

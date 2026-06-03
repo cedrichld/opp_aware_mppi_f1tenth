@@ -1,0 +1,21 @@
+# TODO: Replace this placeholder with the real UNDER (lower-track) map yaml
+# produced by SLAM at the venue. Both keys below need real values.
+#
+# Workflow:
+#   1) Stand at the start line. Mark it with tape.
+#   2) `ros2 launch slam_toolbox online_async_launch.py` and drive the lower
+#      route slowly, making sure pillars under the bridge get clean lidar coverage.
+#   3) Save the map with `ros2 service call /slam_toolbox/save_map ...`.
+#   4) Copy the resulting .pgm and .yaml here, then update the `image` field below.
+#   5) (Optional) Clean phantom deck reflections in GIMP, KEEPING pillars.
+#
+# IMPORTANT: SLAM the OVER map from the SAME tape mark so both maps share
+# the world frame origin. PF poses are in (x, y) meters; they only transfer
+# across map swaps if both maps share the same world (0, 0).
+
+image: TODO_under_map.pgm   # TODO
+resolution: 0.05            # TODO: must match the OVER map exactly
+origin: [0.0, 0.0, 0.0]     # TODO: copy from slam_toolbox output
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

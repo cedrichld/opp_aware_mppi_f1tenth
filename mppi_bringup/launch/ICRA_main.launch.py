@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -12,20 +13,16 @@ def generate_launch_description():
     drive_topic = LaunchConfiguration('drive_topic')
     wall_map_yaml = LaunchConfiguration('wall_map_yaml')
 
+    # Bridge dual-region launch toggle (the only knob in the launch file —
+    # all bubble/centre tuning lives in region_config_file yaml).
+    bridge_enabled = LaunchConfiguration('bridge_enabled')
+    region_config_file = LaunchConfiguration('region_config_file')
+
     # Stop drive while MPPI warms up
     stop_drive = ExecuteProcess(
         cmd=[
-            'ros2',
-            'topic',
-            'pub',
-            '--times',
-            '10',
-            '--rate',
-            '10',
-            '--print',
-            '0',
-            '--wait-matching-subscriptions',
-            '0',
+            'ros2', 'topic', 'pub', '--times', '10', '--rate', '10',
+            '--print', '0', '--wait-matching-subscriptions', '0',
             drive_topic,
             'ackermann_msgs/msg/AckermannDriveStamped',
             '{drive: {steering_angle: 0.0, speed: 0.0}}',
@@ -34,8 +31,10 @@ def generate_launch_description():
     )
 
     pkg_share = get_package_share_directory('mppi_bringup')
-    csv_path = os.path.join(pkg_share, 'waypoints', 'ICRA_12_dhyey.csv')
+    csv_path = os.path.join(pkg_share, 'waypoints', 'TODO.csv')
 
+    # MPPI gets its own bridge params (over_wpt_path, over_wall_cost_map_yaml,
+    # region_transition_silence_s) from params_ICRA1.yaml — NOT from launch.
     mppi_node = Node(
         package='mppi_example',
         executable='mppi_node',
@@ -46,6 +45,17 @@ def generate_launch_description():
             'wpt_path_absolute': True,
             'wall_cost_map_yaml': wall_map_yaml,
         }],
+    )
+
+    # region_manager params come entirely from region_config_file yaml.
+    # Launches only when bridge_enabled:=true.
+    region_manager = Node(
+        package='region_manager',
+        executable='region_manager',
+        name='region_manager',
+        output='screen',
+        condition=IfCondition(bridge_enabled),
+        parameters=[region_config_file],
     )
 
     return LaunchDescription([
@@ -70,11 +80,22 @@ def generate_launch_description():
                 'maps',
                 'ICRA_1.yaml',
             ]),
-            description='Static map yaml used to build the wall-distance cost field',
+            description='Static map yaml used to build the wall-distance cost field (UNDER region)',
         ),
+        # ── Bridge mode ──
+        DeclareLaunchArgument('bridge_enabled', default_value='true',
+                              description='Enable dual-region (under/over) bridge mode and launch region_manager'),
+        DeclareLaunchArgument(
+            'region_config_file',
+            default_value=PathJoinSubstitution([
+                FindPackageShare('mppi_bringup'),
+                'config',
+                'region_ICRA_Masters.yaml',
+            ]),
+            description='Yaml with region_manager params (bubble centres, radii, pose topic).',
+        ),
+
         stop_drive,
-        TimerAction(
-            period=1.6,
-            actions=[mppi_node],
-        ),
+        TimerAction(period=1.6, actions=[mppi_node]),
+        region_manager,
     ])

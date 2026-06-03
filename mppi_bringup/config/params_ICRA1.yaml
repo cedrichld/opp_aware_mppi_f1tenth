@@ -90,6 +90,21 @@ lmppi_node:
     wall_cost_power: 0.6
     wall_cost_map_yaml: '' #injected by launch
 
+    # ── Bridge / dual-region (read once at startup; restart node to change) ──
+    # When bridge_enabled is true, MPPI pre-loads a SECOND InferEnv+MPPI
+    # instance configured with over_wpt_path + over_wall_cost_map_yaml, and
+    # swaps between them on /region/active messages. The current region is
+    # also used to gate opponent cost: opp is FULLY OFF while in OVER, plus
+    # silenced for region_transition_silence_s after any swap so PF can
+    # re-converge on the new map before opp tracking is trusted again.
+    bridge_enabled: true                  # toggle via launch arg or here
+    # TODO: fill these absolute paths from your install share dir after
+    # SLAMming/generating the OVER raceline at the venue:
+    over_wpt_path: ''                      # /opt/ros/.../share/mppi_bringup/waypoints/ICRA_Masters/over.csv
+    over_wall_cost_map_yaml: ''            # /opt/ros/.../share/mppi_bringup/maps/ICRA_Masters/over_map.yaml
+    region_topic: '/region/active'
+    region_transition_silence_s: 0.2       # 0.2 s opp-cost silence after each swap
+
     # Opponent-aware MPPI cost. Keep disabled until /opponent/predicted_path
     # is healthy, then tune weight/radius live with ros2 param set.
     opponent_path_topic: /opponent/predicted_path

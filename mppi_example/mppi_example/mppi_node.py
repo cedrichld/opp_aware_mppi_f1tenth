@@ -110,22 +110,56 @@ class MPPI_Node(Node):
             self.config.random_seed = np.random.randint(0, 1e6)
         jrng = jax_utils.oneLineJaxRNG(self.config.random_seed)
 
-        if self.config.wpt_path_absolute and self.config.wpt_path:
-            self.get_logger().info(f'Loading raceline directly from {self.config.wpt_path}')
-            track, self.config = Track.load_map_from_csv(self.config.wpt_path, self.config)
+        # ── Build region instance(s). In bridge mode we pre-load TWO complete
+        # InferEnv+MPPI instances (under/over), each with its own warmed JIT
+        # cache. /region/active swaps which is referenced by self.infer_env /
+        # self.mppi. JIT cache is per-instance so swaps are zero-stall.
+        bridge_on = bool(getattr(self.config, 'bridge_enabled', False))
+
+        def _build(label, wpt_path, wall_yaml):
+            if not (self.config.wpt_path_absolute and wpt_path):
+                self.resolve_map_dir()
+                map_info_arr = np.genfromtxt(self.config.map_dir + 'map_info.txt',
+                                             delimiter='|', dtype='str')
+                tr, self.config = Track.load_map(self.config.map_dir, map_info_arr,
+                                                 self.config.map_ind, self.config)
+            else:
+                self.get_logger().info(f"[{label}] Loading raceline directly from {wpt_path}")
+                tr, self.config = Track.load_map_from_csv(wpt_path, self.config)
+            ie = InferEnv(
+                tr, self.config, DT=self.config.sim_time_step,
+                wall_cost_map_yaml_override=(wall_yaml or None),
+            )
+            mp = MPPI(
+                self.config,
+                ie,
+                jrng,
+                temperature=self.config.temperature,
+                damping=self.config.damping,
+            )
+            return tr, ie, mp
+
+        # Always build "under" (= the default/single-map instance).
+        under_wpt = self.config.wpt_path
+        under_wall = getattr(self.config, 'wall_cost_map_yaml', '')
+        track, self.infer_env_under, self.mppi_under = _build('under', under_wpt, under_wall)
+
+        if bridge_on:
+            over_wpt = getattr(self.config, 'over_wpt_path', '') or under_wpt
+            over_wall = getattr(self.config, 'over_wall_cost_map_yaml', '') or under_wall
+            self.get_logger().info(
+                f"BRIDGE MODE ON | over_wpt='{over_wpt}' | over_wall='{over_wall}'"
+            )
+            _, self.infer_env_over, self.mppi_over = _build('over', over_wpt, over_wall)
         else:
-            self.resolve_map_dir()
-            map_info = np.genfromtxt(self.config.map_dir + 'map_info.txt', delimiter='|', dtype='str')
-            track, self.config = Track.load_map(self.config.map_dir, map_info, self.config.map_ind, self.config)
-        # track.waypoints[:, 3] += 0.5 * np.pi
-        self.infer_env = InferEnv(track, self.config, DT=self.config.sim_time_step)
-        self.mppi = MPPI(
-            self.config,
-            self.infer_env,
-            jrng,
-            temperature=self.config.temperature,
-            damping=self.config.damping,
-        )
+            self.infer_env_over = None
+            self.mppi_over = None
+
+        # Active region pointers. swap_region() reassigns these atomically.
+        self.active_region = 'under'
+        self.infer_env = self.infer_env_under
+        self.mppi = self.mppi_under
+        self._region_switch_time = 0.0  # used for opp-silence window
         self.get_params()
 
         # Do a dummy call on the MPPI to initialize the variables
@@ -154,6 +188,44 @@ class MPPI_Node(Node):
                     jnp.zeros((n_probes, 2), dtype=jnp.float32))
         except Exception as exc:  # noqa: BLE001 — pre-warm best-effort
             self.get_logger().warn(f"sample_wall_distance pre-warm skipped: {exc}")
+
+        # ── Bridge: pre-warm the over instance too so first switch is stall-free
+        if self.mppi_over is not None:
+            try:
+                self.get_logger().info('Pre-warming OVER instance MPPI + wall SDF...')
+                ref_over, _ = self.infer_env_over.get_refernece_traj(
+                    state_c_0.copy(), self.config.ref_vel, self.config.n_steps)
+                fric_over = self.infer_env_over.get_reference_frictions(state_c_0, self.config.n_steps)
+                self.mppi_over.update(
+                    jnp.asarray(state_c_0),
+                    jnp.asarray(ref_over),
+                    jnp.asarray(self.opponent_xy_horizon),
+                    False,
+                    reference_frictions=fric_over,
+                )
+                if getattr(self.infer_env_over, 'wall_sdf', None) is not None:
+                    self.infer_env_over.sample_wall_distance(
+                        jnp.zeros((n_probes, 2), dtype=jnp.float32))
+                # Restore over instance's a_opt to zeros — pre-warm dirtied it.
+                self.mppi_over.a_opt = jnp.zeros_like(self.mppi_over.a_opt)
+                self.get_logger().info('OVER instance ready.')
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(f'OVER pre-warm failed: {exc}')
+
+        # ── Bridge: subscribe to /region/active for live region switching.
+        if self.mppi_over is not None:
+            from std_msgs.msg import String as _RegionMsg
+            self.region_sub = self.create_subscription(
+                _RegionMsg,
+                str(getattr(self.config, 'region_topic', '/region/active')),
+                self._on_region_active,
+                10,
+            )
+            self.get_logger().info(
+                f"Region switching active. topic="
+                f"{getattr(self.config, 'region_topic', '/region/active')}"
+            )
+
         self.get_logger().info('MPPI initialized')
         self.last_speed_command_time = None
         self.last_pose_callback_wall_time = None
@@ -535,6 +607,15 @@ class MPPI_Node(Node):
             # every solve. Default 5 Hz = enough for human eyes; control
             # still solves at full rate.
             'viz_publish_rate_hz': 5.0,
+            # ── Bridge / dual-region support (read-once at startup) ──
+            # When enabled, the node builds a SECOND InferEnv+MPPI instance
+            # configured with `over_wpt_path` + `over_wall_cost_map_yaml`, and
+            # swaps between them on /region/active messages.
+            'bridge_enabled': False,
+            'over_wpt_path': '',                # absolute path to over-bridge raceline CSV
+            'over_wall_cost_map_yaml': '',      # absolute path to over-bridge map yaml
+            'region_topic': '/region/active',
+            'region_transition_silence_s': 0.3, # opp cost forced off this many seconds after a switch
         }
         for key, value in defaults.items():
             if not hasattr(self.config, key):
@@ -859,6 +940,21 @@ class MPPI_Node(Node):
               fdesc('Skip MPPI solve if cached pose age exceeds this (sec).', 0.05, 1.0, 0.01))
         declf('stats_log_interval_sec', self.config.stats_log_interval_sec,
               fdesc('Periodic stats logger interval (sec). 0 disables.', 0.0, 60.0, 0.5))
+
+        # ── Bridge dual-region (read-once at startup) ──
+        declb('bridge_enabled', self.config.bridge_enabled,
+              desc('[startup] Pre-load TWO MPPI/InferEnv instances (under + over). '
+                   '/region/active swaps which one drives. Restart node to change.', read_only=True))
+        decls('over_wpt_path', self.config.over_wpt_path,
+              desc('[startup] Absolute path to over-bridge raceline CSV.', read_only=True))
+        decls('over_wall_cost_map_yaml', self.config.over_wall_cost_map_yaml,
+              desc('[startup] Absolute path to over-bridge wall-cost map yaml.', read_only=True))
+        decls('region_topic', self.config.region_topic,
+              desc('[startup] Topic to subscribe for region switches (std_msgs/String).',
+                   read_only=True))
+        declf('region_transition_silence_s', self.config.region_transition_silence_s,
+              fdesc('Force opponent_active=False this many seconds after a region switch.',
+                    0.0, 5.0, 0.05))
 
 
     def get_params(self, startup=False):
@@ -1197,6 +1293,10 @@ class MPPI_Node(Node):
         self.config.viz_publish_rate_hz = max(
             0.0, float(self.get_parameter('viz_publish_rate_hz').value),
         )
+        # Bridge: live-tune the post-switch opp-silence window
+        self.config.region_transition_silence_s = max(
+            0.0, float(self.get_parameter('region_transition_silence_s').value),
+        )
         if hasattr(self, 'infer_env'):
             self.infer_env.config = self.config
             self.infer_env.norm_params = self.config.norm_params
@@ -1264,6 +1364,56 @@ class MPPI_Node(Node):
 
         self.opponent_xy_horizon = horizon[:self.config.n_steps]
         self.opponent_path_time = self.now_sec()
+
+    # ── Bridge: region switching ─────────────────────────────────────────
+    def _on_region_active(self, msg):
+        """Subscriber callback: receive a region name from RegionManager.
+        Swap self.infer_env / self.mppi pointers if the region changed.
+        Reset the new MPPI's a_opt (don't warm-start from the other region's
+        action sequence — they were generated under a different map/raceline).
+        Start the opp-silence window so the opponent cost is forced off while
+        PF re-converges on the new map."""
+        if self.mppi_over is None:
+            return
+        name = str(msg.data).strip().lower()
+        if name not in ('under', 'over'):
+            return
+        if name == self.active_region:
+            return
+
+        old = self.active_region
+        self.active_region = name
+        if name == 'over':
+            self.infer_env = self.infer_env_over
+            self.mppi = self.mppi_over
+        else:
+            self.infer_env = self.infer_env_under
+            self.mppi = self.mppi_under
+        # Cold-start action sequence for the new region (avoid carrying steering
+        # commands across maps — they'd plan into the wall of the old map).
+        try:
+            self.mppi.a_opt = jnp.zeros_like(self.mppi.a_opt)
+            if getattr(self.mppi, 'a_cov', None) is not None:
+                self.mppi.a_cov = self.mppi.a_cov_init
+        except Exception as exc:
+            self.get_logger().warn(f"region swap a_opt reset failed: {exc}")
+        # Opp silence window starts NOW.
+        self._region_switch_time = self.now_sec()
+        self.get_logger().warn(
+            f"[REGION] {old} -> {name} | opp silenced for "
+            f"{float(self.config.region_transition_silence_s):.2f}s"
+        )
+
+    def _opp_silenced(self):
+        """True when opponent cost should be forced off:
+           - We're currently in the OVER region (no opponent tracking there), OR
+           - We're inside the post-switch transition window."""
+        if self.active_region == 'over':
+            return True
+        if self._region_switch_time <= 0.0:
+            return False
+        elapsed = self.now_sec() - self._region_switch_time
+        return elapsed < float(self.config.region_transition_silence_s)
 
     def get_opponent_horizon(self):
         horizon = np.asarray(self.opponent_xy_horizon, dtype=np.float32)
@@ -2021,6 +2171,13 @@ class MPPI_Node(Node):
         opponent_traj, opponent_active, opponent_age = self.get_opponent_horizon()
         if not self.sanitize_opponent_horizon():
             opponent_traj, opponent_active, opponent_age = self.get_opponent_horizon()
+        # Bridge: force opp inactive while on OVER + during the post-switch
+        # transition window. opponent_active=False is already the existing
+        # gate runtime_params() uses to zero out all opponent-related cost
+        # weights, so this single line silences ALL opp behaviors (cost,
+        # auto-follow, auto-pass) without touching the JAX side.
+        if self._opp_silenced():
+            opponent_active = False
         self.apply_auto_opponent_behavior(state_c_0, reference_traj, opponent_traj, opponent_active)
 
         ## MPPI call
