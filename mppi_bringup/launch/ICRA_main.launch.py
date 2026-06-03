@@ -34,7 +34,7 @@ def generate_launch_description():
     )
 
     pkg_share = get_package_share_directory('mppi_bringup')
-    csv_path = os.path.join(pkg_share, 'waypoints', 'ICRA_10.csv')
+    csv_path = os.path.join(pkg_share, 'waypoints', 'ICRA_12_dhyey.csv')
 
     mppi_node = Node(
         package='mppi_example',
