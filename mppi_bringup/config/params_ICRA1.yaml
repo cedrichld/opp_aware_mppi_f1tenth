@@ -38,7 +38,7 @@ lmppi_node:
     temperature: 0.015             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
     # damping: 0.001                # Prevents weight normalization issues when rollout rewards are similar.
     # ref_vel: 2.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
-    init_vel: 2.9                 # Minimum speed assumed by the rollout model at startup/very low speed.
+    init_vel: 2.7                 # Minimum speed assumed by the rollout model at startup/very low speed.
     startup_speed: 1.0            # Minimum /drive.speed while measured speed is below init_vel.
     use_pose_delta_state_estimate: true # Real car: estimate vx / yaw-rate from PF pose deltas plus command prior.
     # Fallback friction belief — used only when the raceline CSV has no per-waypoint
@@ -101,7 +101,7 @@ lmppi_node:
     opponent_path_timeout: 0.5
     opponent_behavior_mode: clear         # auto, follow, clear, pass_left, pass_right.
     opponent_follow_weight: 8.0          # In follow mode, penalizes closing too near behind the opponent.
-    opponent_follow_distance: 1.2        # Desired gap behind opponent along the raceline tangent.
+    opponent_follow_distance: 1.0        # Desired gap behind opponent along the raceline tangent.
     opponent_same_lane_width: 0.7        # Follow gap only applies when ego is roughly in same lane.
     opponent_pass_weight: 40.0           # In pass modes, pushes rollout to requested side near opponent.
     opponent_pass_lateral_offset: 0.35   # Desired lateral offset from opponent during a pass.
