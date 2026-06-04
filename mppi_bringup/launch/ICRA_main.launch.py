@@ -17,6 +17,11 @@ def generate_launch_description():
     # all bubble/centre tuning lives in region_config_file yaml).
     bridge_enabled = LaunchConfiguration('bridge_enabled')
     region_config_file = LaunchConfiguration('region_config_file')
+    # Paths to the OVER raceline + OVER wall map. Resolved via FindPackageShare
+    # at runtime so the same launch file works on dev (cedric) and Jetson (nvidia)
+    # without hardcoded absolute paths.
+    over_wpt_path = LaunchConfiguration('over_wpt_path')
+    over_wall_yaml = LaunchConfiguration('over_wall_yaml')
 
     # Stop drive while MPPI warms up
     stop_drive = ExecuteProcess(
@@ -44,6 +49,10 @@ def generate_launch_description():
             'wpt_path': csv_path,
             'wpt_path_absolute': True,
             'wall_cost_map_yaml': wall_map_yaml,
+            # Same #injected-by-launch pattern as wall_cost_map_yaml: yaml has
+            # empty strings, launch fills the machine-correct absolute paths.
+            'over_wpt_path': over_wpt_path,
+            'over_wall_cost_map_yaml': over_wall_yaml,
         }],
     )
 
@@ -93,6 +102,27 @@ def generate_launch_description():
                 'region_ICRA_Masters.yaml',
             ]),
             description='Yaml with region_manager params (bubble centres, radii, pose topic).',
+        ),
+        # Portable absolute paths for the OVER files (machine-independent).
+        # Replace ICRA_Masters/over.csv and ICRA_Masters/over_map.yaml here only
+        # if you reorganise the files in mppi_bringup/{waypoints,maps}.
+        DeclareLaunchArgument(
+            'over_wpt_path',
+            default_value=PathJoinSubstitution([
+                FindPackageShare('mppi_bringup'),
+                'waypoints',
+                'ICRA_Masters', 'over.csv',
+            ]),
+            description='Absolute path to OVER-bridge raceline CSV (resolved via FindPackageShare).',
+        ),
+        DeclareLaunchArgument(
+            'over_wall_yaml',
+            default_value=PathJoinSubstitution([
+                FindPackageShare('mppi_bringup'),
+                'maps',
+                'ICRA_Masters', 'over_map.yaml',
+            ]),
+            description='Absolute path to OVER-bridge wall-cost map yaml (resolved via FindPackageShare).',
         ),
 
         stop_drive,
