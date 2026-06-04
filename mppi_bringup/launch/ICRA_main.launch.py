@@ -34,7 +34,7 @@ def generate_launch_description():
     )
 
     pkg_share = get_package_share_directory('mppi_bringup')
-    csv_path = os.path.join(pkg_share, 'waypoints', 'ICRA_12_dhyey.csv')
+    csv_path = os.path.join(pkg_share, 'waypoints', 'ICRA_under_main.csv')
 
     mppi_node = Node(
         package='mppi_example',
@@ -67,8 +67,8 @@ def generate_launch_description():
             'wall_map_yaml',
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
-                'maps',
-                'ICRA_1.yaml',
+                'maps', "ICRA_Masters",
+                'under_map.yaml',
             ]),
             description='Static map yaml used to build the wall-distance cost field',
         ),
