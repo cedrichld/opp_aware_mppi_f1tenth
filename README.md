@@ -9,12 +9,10 @@ real hardware on a Jetson Orin Nano). Built on
 This repo was used for both the **final race** and **final project**
 for ESE 6150 (UPenn, Spring 2026).
 
-## Team 5 Thunderbolt
+## UPenn Team - ICRA 26 (Vienna) & IV 26 (Detroit)
 
 - Cedric Hollande - [@cedrichld](https://github.com/cedrichld)
-- Zach Rudder - [@zachrudder](https://github.com/zachrudder)
-- Maanasa Rajeshwer - [@MaanaRajesh](https://github.com/MaanaRajesh)
-- Boyuan Yang - [@yang50-guaidao](https://github.com/yang50-guaidao)
+- Dhyey Shah - [@dhyeyshah28](https://github.com/dhyeyshah28)
 
 ## Demo
 
