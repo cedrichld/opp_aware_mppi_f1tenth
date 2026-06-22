@@ -10,6 +10,7 @@ control_sample_std:
 damping: 0.001
 exp_name: mppi_tracking
 friction: 0.8
+friction_max: 1.5   # live grip ceiling; planned/embedded per-waypoint mu clipped to this
 init_vel: 1.0
 is_sim: true
 map_dir: ./waypoints/

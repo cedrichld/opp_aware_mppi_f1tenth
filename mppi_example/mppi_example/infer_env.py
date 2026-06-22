@@ -17,6 +17,17 @@ except ImportError:
     import utils.jax_utils as jax_utils
     from dynamics_models.dynamics_models_jax import vehicle_dynamics_ks, vehicle_dynamics_st
 
+# Lower clip floor for any friction value MPPI uses (embedded per-waypoint or
+# scalar fallback) — keeps mu strictly positive so the dynamics never divide by
+# a zero/near-zero grip. The UPPER ceiling is the live `friction_max` ROS param
+# (config.friction_max); MPPI trims the planned/embedded mu to it at read time,
+# so the raceline can carry an aggressive mu and you can raise the cap on the
+# fly. Note: the active dynamic_ST model treats mu as a free linear scale, so
+# there is no tire-curve limit here — friction_max is a tunable safety ceiling,
+# not a hard model bound. Default lives in mppi_node defaults / config.yaml.
+FRICTION_MIN = 1e-3
+FRICTION_MAX_DEFAULT = 1.5
+
 CUDANUM = 0
 # Preallocate a fixed slice of unified memory so the JAX allocator doesn't
 # fragment over a long race. PREALLOCATE=true + MEM_FRACTION=0.50 reserves
@@ -38,12 +49,16 @@ class InferEnv():
         self.waypoints_distances = np.linalg.norm(self.waypoints[1:, (1, 2)] - self.waypoints[:-1, (1, 2)], axis=1)
         # Per-waypoint friction: pull from track if CSV had column 10, else broadcast config.friction
         # so downstream code can always index `self.waypoint_frictions[i]`.
+        # Store the RAW per-waypoint friction; the clip to [FRICTION_MIN,
+        # config.friction_max] is applied at read time in get_reference_frictions
+        # so the live `friction_max` param takes effect without a re-push.
         track_fric = getattr(track, "frictions", None)
         if track_fric is not None and np.isfinite(track_fric).all():
             self.waypoint_frictions = np.asarray(track_fric, dtype=np.float32)
             self.has_per_waypoint_friction = True
             print(f"InferEnv: per-waypoint friction loaded ({len(self.waypoint_frictions)} pts, "
-                  f"min={self.waypoint_frictions.min():.3f}, max={self.waypoint_frictions.max():.3f})")
+                  f"raw min={self.waypoint_frictions.min():.3f}, max={self.waypoint_frictions.max():.3f}; "
+                  f"clipped to [{FRICTION_MIN}, friction_max] at use)")
         else:
             self.waypoint_frictions = np.full(len(self.waypoints), float(config.friction), dtype=np.float32)
             self.has_per_waypoint_friction = False
@@ -119,7 +134,9 @@ class InferEnv():
         self.waypoints = waypoints
         self.diff = self.waypoints[1:, 1:3] - self.waypoints[:-1, 1:3]
         self.waypoints_distances = np.linalg.norm(self.waypoints[1:, (1, 2)] - self.waypoints[:-1, (1, 2)], axis=1)
-        # Re-read friction column if present (10th column)
+        # Re-read friction column if present (10th column). Stored raw; the
+        # [FRICTION_MIN, friction_max] clip is applied at read time so a live
+        # friction_max change re-trims a hot-swapped traj without a re-push.
         if waypoints.shape[1] >= 10:
             fric = waypoints[:, 9]
             if np.isfinite(fric).all():
@@ -137,8 +154,13 @@ class InferEnv():
         `get_refernece_traj`. Falls back to scalar `config.friction` array if no
         per-waypoint friction is loaded. Always returns a `(n_steps,)` jnp array.
         """
+        # Live grip ceiling: trim the planned/embedded mu to friction_max so
+        # MPPI never believes in more grip than allowed. Read each call so the
+        # ROS param takes effect instantly.
+        fric_max = float(getattr(self.config, 'friction_max', FRICTION_MAX_DEFAULT))
         if not self.has_per_waypoint_friction:
-            return jnp.full((int(n_steps),), float(self.config.friction), dtype=jnp.float32)
+            mu = float(np.clip(self.config.friction, FRICTION_MIN, fric_max))
+            return jnp.full((int(n_steps),), mu, dtype=jnp.float32)
         _, _, _, _, ind = nearest_point(np.array([state[0], state[1]]),
                                         self.waypoints[:, (1, 2)].copy(), self.diff)
         N = len(self.waypoint_frictions)
@@ -146,7 +168,8 @@ class InferEnv():
         # spatial coarseness of the reference; finer-grained interpolation is
         # not worth the complexity given mu changes slowly along the track).
         idxs = (int(ind) + np.arange(int(n_steps))) % N
-        return jnp.asarray(self.waypoint_frictions[idxs], dtype=jnp.float32)
+        mu = np.clip(self.waypoint_frictions[idxs], FRICTION_MIN, fric_max)
+        return jnp.asarray(mu, dtype=jnp.float32)
     
     @partial(jax.jit, static_argnums=(0,))
     def reward_fn_xy(self, state, reference, reward_weights=None, cost_params=None, opponent_traj=None):

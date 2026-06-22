@@ -436,6 +436,7 @@ class MPPI_Node(Node):
             'speed_profile_drive_max_decel': 0.0,
             'startup_speed': float(self.config.init_vel) * 2.0,
             'use_pose_delta_state_estimate': False,
+            'friction_max': 1.5,   # live grip ceiling; planned/embedded mu is clipped to this in InferEnv
             'min_speed': 0.0,
             'max_speed': 20.0,
             'max_steering_angle': 0.4189,
@@ -635,6 +636,11 @@ class MPPI_Node(Node):
         declf('friction', self.config.friction,
               fdesc('Tire/friction belief for dynamic_ST rollouts.',
                     0.05, 1.5, 0.01))
+        declf('friction_max', self.config.friction_max,
+              fdesc('Live grip ceiling: planned/embedded per-waypoint mu is '
+                    'clipped to this in InferEnv. Raise to let MPPI use the '
+                    'friction the raceline planned with.',
+                    0.05, 2.0, 0.01))
         decli('n_iterations', self.config.n_iterations,
               idesc('MPPI update passes per odom callback.', 1, 10))
 
@@ -887,6 +893,7 @@ class MPPI_Node(Node):
             self.get_parameter('use_pose_delta_state_estimate').value
         )
         self.config.friction = float(self.get_parameter('friction').value)
+        self.config.friction_max = float(self.get_parameter('friction_max').value)
         self.config.n_iterations = max(1, int(self.get_parameter('n_iterations').value))
         self.config.control_sample_std = [
             float(self.get_parameter('control_sample_std_steer').value),
