@@ -6,7 +6,7 @@ lmppi_node:
     is_sim: false                  # true: /ego_racecar/odom; false: /pf/pose/odom.
     state_predictor: dynamic_ST   # Rollout model. dynamic_ST includes yaw rate/slip; kinematic_ST is simpler.
     n_samples: 8192               # Number of sampled control sequences. More is steadier but slower.
-    n_steps: 8 #try lower                   # Rollout horizon length. At dt=0.1, 12 steps = 1.2s lookahead.
+    n_steps: 6 #try lower                   # Rollout horizon length. At dt=0.1, 12 steps = 1.2s lookahead.
     n_iterations: 4 # maybe 2/3 if Hz suffer
     sim_time_step: 0.1            # Rollout integration/control timestep used inside MPPI.
     random_seed: 527787           # Sampling seed. Keep fixed for repeatable tuning runs.
@@ -35,7 +35,7 @@ lmppi_node:
 
     # Live tuning parameters: mppi_node.get_params() refreshes these on every
     # odometry callback, so they can be changed with ros2 param set.
-    temperature: 0.015             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
+    temperature: 0.04             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
     # damping: 0.001                # Prevents weight normalization issues when rollout rewards are similar.
     # ref_vel: 2.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
     init_vel: 2.7                 # Minimum speed assumed by the rollout model at startup/very low speed.
