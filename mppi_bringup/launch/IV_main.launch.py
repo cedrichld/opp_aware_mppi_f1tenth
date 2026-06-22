@@ -34,7 +34,7 @@ def generate_launch_description():
     )
 
     pkg_share = get_package_share_directory('mppi_bringup')
-    csv_path = os.path.join(pkg_share, 'waypoints', 'IV1.csv')
+    csv_path = os.path.join(pkg_share, 'waypoints', 'IV7.csv')
 
     mppi_node = Node(
         package='mppi_example',
@@ -68,7 +68,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
                 'maps',
-                'IV6.yaml',
+                'IV1.yaml',
             ]),
             description='Static map yaml used to build the wall-distance cost field',
         ),
