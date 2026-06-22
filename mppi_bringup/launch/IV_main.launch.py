@@ -68,7 +68,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('mppi_bringup'),
                 'maps',
-                'IV1.yaml',
+                'IV6.yaml',
             ]),
             description='Static map yaml used to build the wall-distance cost field',
         ),

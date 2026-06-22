@@ -38,7 +38,7 @@ lmppi_node:
     temperature: 0.015             # MPPI greediness. Lower = winner-take-all; higher = smoother averaging.
     # damping: 0.001                # Prevents weight normalization issues when rollout rewards are similar.
     # ref_vel: 2.0                  # OLD: Legacy constant-speed reference seed. Mostly bypassed when profile is on.
-    init_vel: 2.9                 # Minimum speed assumed by the rollout model at startup/very low speed.
+    init_vel: 2.7                 # Minimum speed assumed by the rollout model at startup/very low speed.
     startup_speed: 1.0            # Minimum /drive.speed while measured speed is below init_vel.
     use_pose_delta_state_estimate: true # Real car: estimate vx / yaw-rate from PF pose deltas plus command prior.
     # Fallback friction belief — used only when the raceline CSV has no per-waypoint
@@ -86,7 +86,7 @@ lmppi_node:
 
     wall_cost_enabled: true
     wall_cost_weight: 10.0
-    wall_cost_margin: 0.3
+    wall_cost_margin: 0.2
     wall_cost_power: 0.6
     wall_cost_map_yaml: '' #injected by launch
 
