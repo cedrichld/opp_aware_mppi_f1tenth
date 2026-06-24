@@ -100,6 +100,7 @@ public:
     debug_topic_ = declare_parameter<std::string>("debug_topic", "/opponent/debug");
     waypoint_path_ = declare_parameter<std::string>("waypoint_path", "");
     waypoint_path_absolute_ = declare_parameter<bool>("waypoint_path_absolute", true);
+    reverse_waypoints_ = declare_parameter<bool>("reverse_waypoints", false);
     frame_id_ = declare_parameter<std::string>("frame_id", "map");
     pose_source_ = declare_parameter<std::string>("pose_source", "odom_pose");
     tf_lookup_timeout_ = std::max(0.0, declare_parameter<double>("tf_lookup_timeout", 0.02));
@@ -263,6 +264,11 @@ private:
       return;
     }
 
+    if (reverse_waypoints_) {
+      reverseWaypoints();
+      RCLCPP_INFO(get_logger(), "reverse_waypoints=true: centerline flipped to match opposite travel direction.");
+    }
+
     const auto & first = waypoints_.front();
     const auto & last = waypoints_.back();
     track_length_ = last.s + std::hypot(first.x - last.x, first.y - last.y);
@@ -270,6 +276,28 @@ private:
       RCLCPP_ERROR(get_logger(), "Invalid track length from waypoint_path: %s", path.c_str());
       waypoints_.clear();
       return;
+    }
+  }
+
+  // Reverse the loaded centerline so its arc-length s increases *with* travel
+  // when racing the track in the opposite direction. Without this the opponent
+  // moves toward decreasing s: progress speed comes out negative (and is
+  // rejected by the validity gate), the horizon propagates the wrong way around
+  // the loop, and predicted headings point backwards. Flipping the point order,
+  // recomputing s as cumulative chord length, and rotating each heading by pi
+  // keeps projection, the Kalman progress speed, prediction, and yaws all
+  // self-consistent. Applied once at load time; not a live param.
+  void reverseWaypoints()
+  {
+    std::reverse(waypoints_.begin(), waypoints_.end());
+    waypoints_.front().s = 0.0;
+    waypoints_.front().yaw = wrapAngle(waypoints_.front().yaw + M_PI);
+    for (std::size_t i = 1; i < waypoints_.size(); ++i) {
+      const double ds = std::hypot(
+        waypoints_[i].x - waypoints_[i - 1].x,
+        waypoints_[i].y - waypoints_[i - 1].y);
+      waypoints_[i].s = waypoints_[i - 1].s + ds;
+      waypoints_[i].yaw = wrapAngle(waypoints_[i].yaw + M_PI);
     }
   }
 
@@ -844,6 +872,7 @@ private:
   std::string debug_topic_;
   std::string waypoint_path_;
   bool waypoint_path_absolute_ = true;
+  bool reverse_waypoints_ = false;
   std::string frame_id_ = "map";
   std::string pose_source_ = "odom_pose";
   double tf_lookup_timeout_ = 0.02;

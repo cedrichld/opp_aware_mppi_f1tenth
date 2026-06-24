@@ -584,6 +584,9 @@ This lets the prediction start from the opponent's measured side of the track, w
 `waypoint_path`
 : Raceline CSV used for projection and prediction. This must match the current map and track.
 
+`reverse_waypoints`
+: Set `true` when racing the track in the opposite direction to the centerline CSV. The node flips the loaded waypoints at load time (point order reversed, progress `s` recomputed as cumulative chord length, headings rotated by $\pi$) so opponent progress runs *with* travel. Without it, the opponent moves toward decreasing `s`: progress speed is measured negative and rejected, and the horizon propagates the wrong way around the loop. Keep this in sync with the detector's `reverse_waypoints` so both nodes share one progress frame.
+
 `frame_id`
 : Output frame, usually `map`.
 

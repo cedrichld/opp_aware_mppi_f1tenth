@@ -11,6 +11,9 @@ opponent_predictor:
     # Relative paths are resolved from the mppi_bringup package share.
     waypoint_path: waypoints/houston_main1.csv
     waypoint_path_absolute: false
+    # Set true when racing the track in the opposite direction to the centerline
+    # CSV; flips the loaded waypoints so opponent progress (s) runs with travel.
+    reverse_waypoints: false
     frame_id: map
     pose_source: odom_pose
     tf_lookup_timeout: 0.02

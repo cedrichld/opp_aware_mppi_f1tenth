@@ -10,6 +10,9 @@ opponent_lidar_detector:
     # Relative paths are resolved from the mppi_bringup package share.
     waypoint_path: waypoints/houston_main1.csv
     waypoint_path_absolute: false
+    # Set true when racing the track in the opposite direction to the centerline
+    # CSV. Must match the predictor's reverse_waypoints so both share one s frame.
+    reverse_waypoints: false
 
     frame_id: map
     base_frame_id: ego_racecar/base_link

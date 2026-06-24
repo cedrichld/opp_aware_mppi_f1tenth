@@ -120,6 +120,7 @@ public:
 
     waypoint_path_ = declare_parameter<std::string>("waypoint_path", "waypoints/lev_testing/lev_blocked.csv");
     waypoint_path_absolute_ = declare_parameter<bool>("waypoint_path_absolute", false);
+    reverse_waypoints_ = declare_parameter<bool>("reverse_waypoints", false);
     frame_id_ = declare_parameter<std::string>("frame_id", "map");
     base_frame_id_ = declare_parameter<std::string>("base_frame_id", "ego_racecar/base_link");
 
@@ -291,6 +292,11 @@ private:
       return;
     }
 
+    if (reverse_waypoints_) {
+      reverseWaypoints();
+      RCLCPP_INFO(get_logger(), "reverse_waypoints=true: centerline flipped to match opposite travel direction.");
+    }
+
     const auto & first = waypoints_.front();
     const auto & last = waypoints_.back();
     track_length_ = last.s + std::hypot(first.x - last.x, first.y - last.y);
@@ -298,6 +304,24 @@ private:
       RCLCPP_ERROR(get_logger(), "Invalid track length from waypoint_path: %s", path.c_str());
       waypoints_.clear();
       track_length_ = 0.0;
+    }
+  }
+
+  // Reverse the loaded centerline so its arc-length s increases *with* travel
+  // when racing the track in the opposite direction, keeping this node's
+  // progress frame aligned with the predictor's. The raceline yaw used
+  // downstream (gating, center correction) is recomputed from segment direction
+  // in projectToTrack, so the stored yaw needs no flip here. Applied once at
+  // load time; not a live param.
+  void reverseWaypoints()
+  {
+    std::reverse(waypoints_.begin(), waypoints_.end());
+    waypoints_.front().s = 0.0;
+    for (std::size_t i = 1; i < waypoints_.size(); ++i) {
+      const double ds = std::hypot(
+        waypoints_[i].x - waypoints_[i - 1].x,
+        waypoints_[i].y - waypoints_[i - 1].y);
+      waypoints_[i].s = waypoints_[i - 1].s + ds;
     }
   }
 
@@ -989,6 +1013,7 @@ private:
   std::string detector_debug_topic_;
   std::string waypoint_path_;
   bool waypoint_path_absolute_ = false;
+  bool reverse_waypoints_ = false;
   std::string frame_id_ = "map";
   std::string base_frame_id_ = "ego_racecar/base_link";
 
