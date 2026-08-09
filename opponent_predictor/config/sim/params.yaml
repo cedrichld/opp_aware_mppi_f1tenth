@@ -9,7 +9,8 @@ opponent_predictor:
     debug_topic: /opponent/debug
 
     # Relative paths are resolved from the mppi_bringup package share.
-    waypoint_path: waypoints/houston_main1.csv
+    # Must match the raceline MPPI follows (sim_lev_blocked.launch.py).
+    waypoint_path: waypoints/old/lev_testing/lev_blocked.csv
     waypoint_path_absolute: false
     # Set true when racing the track in the opposite direction to the centerline
     # CSV; flips the loaded waypoints so opponent progress (s) runs with travel.

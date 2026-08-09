@@ -8,7 +8,8 @@ opponent_lidar_detector:
     detector_debug_topic: /opponent/detection_debug
 
     # Relative paths are resolved from the mppi_bringup package share.
-    waypoint_path: waypoints/houston_main1.csv
+    # Must match the predictor's waypoint_path so both share one s frame.
+    waypoint_path: waypoints/old/lev_testing/lev_blocked.csv
     waypoint_path_absolute: false
     # Set true when racing the track in the opposite direction to the centerline
     # CSV. Must match the predictor's reverse_waypoints so both share one s frame.
